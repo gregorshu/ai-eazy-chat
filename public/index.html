@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Eazy Chat</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="logo">🤖</div>
+          <div>
+            <h1>AI Eazy Chat</h1>
+            <p class="muted">Multi-chat workspace</p>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="new-folder" class="ghost">+ Folder</button>
+          <button id="new-chat" class="primary">+ New Chat</button>
+        </div>
+        <section class="folders">
+          <div class="section-title">Folders</div>
+          <ul id="folder-list" class="list"></ul>
+        </section>
+        <section class="chats">
+          <div class="section-title">Chats</div>
+          <ul id="chat-list" class="list"></ul>
+        </section>
+      </aside>
+      <main class="workspace">
+        <header class="workspace-header">
+          <div class="chat-meta">
+            <input id="chat-name" class="text-input" placeholder="Chat name" />
+            <select id="chat-folder" class="select-input"></select>
+          </div>
+          <div class="persona">
+            <label for="persona">Persona / System prompt</label>
+            <textarea id="persona" rows="2" placeholder="e.g. You are a playful pirate with a love for TypeScript."></textarea>
+          </div>
+        </header>
+        <section class="attachments">
+          <div class="attachment-header">
+            <div>
+              <strong>Context files</strong>
+              <p class="muted">Attach text files; their contents are sent with every message.</p>
+            </div>
+            <label class="file-label" for="file-input">Add file</label>
+            <input id="file-input" type="file" accept=".txt,.md,.json,.csv" multiple hidden />
+          </div>
+          <ul id="file-list" class="pill-list"></ul>
+        </section>
+        <section class="chat-area" id="chat-area">
+          <div id="messages" class="messages"></div>
+        </section>
+        <footer class="composer">
+          <div class="composer-controls">
+            <select id="model" class="select-input">
+              <option value="openrouter/auto">OpenRouter Auto</option>
+              <option value="anthropic/claude-3-sonnet">Claude 3 Sonnet</option>
+              <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+            </select>
+            <button id="rename-chat" class="ghost">Rename</button>
+            <button id="delete-chat" class="danger ghost">Delete</button>
+          </div>
+          <div class="composer-box">
+            <textarea id="prompt" rows="3" placeholder="Write your message..."></textarea>
+            <button id="send" class="primary">Send</button>
+          </div>
+        </footer>
+      </main>
+    </div>
+    <div id="toast" class="toast"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

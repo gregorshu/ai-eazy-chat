@@ -1,0 +1,13 @@
+{
+  "name": "ai-eazy-chat",
+  "version": "1.0.0",
+  "description": "A lightweight OpenRouter chat workspace with personas, folders, and contextual files.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["openrouter", "chat", "llm", "persona", "folders"],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs"
+}
