@@ -41,12 +41,12 @@ body {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 320px minmax(0, 1fr);
   height: 100vh;
 }
 
 .app-shell.sidebar-hidden {
-  grid-template-columns: 0 1fr;
+  grid-template-columns: 0 minmax(0, 1fr);
 }
 
 .sidebar {
@@ -460,7 +460,8 @@ textarea::placeholder {
   margin-top: 10px;
 }
 
-.retry-button {
+.retry-button,
+.edit-button {
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   height: 34px;

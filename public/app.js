@@ -1,5 +1,6 @@
 const stateKey = 'ai-eazy-chat-state';
 const appShell = document.querySelector('.app-shell');
+const sidebar = document.querySelector('.sidebar');
 const messageContainer = document.getElementById('messages');
 const folderList = document.getElementById('folder-list');
 const promptInput = document.getElementById('prompt');
@@ -21,6 +22,9 @@ const closeSettingsButtons = [
   document.getElementById('close-settings-cta'),
 ];
 let openChatMenuId = null;
+const retryDelays = [3000, 5000, 7000];
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function uuid() {
   return crypto.randomUUID();
@@ -237,6 +241,16 @@ function renderMessages() {
       retryBtn.onclick = retryLastMessage;
 
       actions.appendChild(retryBtn);
+
+      const lastUserIndex = findLastUserIndex(chat.messages);
+      if (lastUserIndex !== -1) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'ghost icon edit-button';
+        editBtn.title = 'Edit your last message';
+        editBtn.textContent = '✎';
+        editBtn.onclick = editLastUserMessage;
+        actions.appendChild(editBtn);
+      }
       div.appendChild(actions);
     }
 
@@ -272,6 +286,7 @@ function renderFiles() {
 
 function render() {
   appShell.classList.toggle('sidebar-hidden', appState.sidebarHidden);
+  sidebar?.setAttribute('aria-hidden', appState.sidebarHidden ? 'true' : 'false');
   renderFolders();
   renderMessages();
   renderChatMeta();
@@ -346,6 +361,15 @@ function persistChatUpdates(partial) {
   setState({ chats });
 }
 
+function findLastUserIndex(messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function moveChat(chatId, folderId) {
   const chats = appState.chats.map((chat) =>
     chat.id === chatId ? { ...chat, folderId } : chat,
@@ -373,6 +397,17 @@ async function sendChatCompletion(messageHistory) {
   persistChatUpdates({ messages: [...messageHistory, pendingMessage] });
 
   try {
+    const data = await performChatRequest({ chat, messageHistory });
+    const assistantMessage = { role: 'assistant', content: data.content || '(no content returned)' };
+    persistChatUpdates({ messages: [...messageHistory, assistantMessage] });
+  } catch (err) {
+    persistChatUpdates({ messages: messageHistory });
+    toastMessage(err.message, 3200);
+  }
+}
+
+async function performChatRequest({ chat, messageHistory }) {
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -383,29 +418,37 @@ async function sendChatCompletion(messageHistory) {
         files: chat.files,
       }),
     });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to fetch response');
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (err) {
+      // Ignore JSON parse issues and fall back to generic errors below.
     }
-    const assistantMessage = { role: 'assistant', content: data.content || '(no content returned)' };
-    persistChatUpdates({ messages: [...messageHistory, assistantMessage] });
-  } catch (err) {
-    persistChatUpdates({ messages: messageHistory });
-    toastMessage(err.message, 3200);
+
+    if (response.ok) {
+      if (data) return data;
+      throw new Error('Invalid response from server');
+    }
+
+    const shouldRetry = response.status === 429 && attempt < retryDelays.length;
+    if (shouldRetry) {
+      await wait(retryDelays[attempt]);
+      continue;
+    }
+
+    const message = data?.error || `Failed to fetch response (status ${response.status})`;
+    throw new Error(message);
   }
+
+  throw new Error('Failed to fetch response');
 }
 
 function retryLastMessage() {
   const chat = getSelectedChat();
   if (!chat || !chat.messages.length) return;
 
-  let lastUserIndex = -1;
-  for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
-    if (chat.messages[i].role === 'user') {
-      lastUserIndex = i;
-      break;
-    }
-  }
+  const lastUserIndex = findLastUserIndex(chat.messages);
 
   if (lastUserIndex === -1) {
     toastMessage('No user message to retry');
@@ -414,6 +457,35 @@ function retryLastMessage() {
 
   const messageHistory = chat.messages.slice(0, lastUserIndex + 1);
   sendChatCompletion(messageHistory);
+}
+
+function editLastUserMessage() {
+  const chat = getSelectedChat();
+  if (!chat || !chat.messages.length) return;
+
+  const lastUserIndex = findLastUserIndex(chat.messages);
+  if (lastUserIndex === -1) {
+    toastMessage('No user message to edit');
+    return;
+  }
+
+  const lastUserMessage = chat.messages[lastUserIndex];
+  const edited = prompt('Edit your last message:', lastUserMessage.content || '');
+  if (edited === null) return;
+
+  const trimmed = edited.trim();
+  if (!trimmed) {
+    toastMessage('Message cannot be empty');
+    return;
+  }
+
+  const updatedMessages = chat.messages.map((msg, idx) =>
+    idx === lastUserIndex ? { ...msg, content: trimmed } : msg,
+  );
+
+  persistChatUpdates({ messages: updatedMessages });
+  promptInput.value = trimmed;
+  toastMessage('Updated last message. Use retry to resend.');
 }
 
 function handleFileUpload(event) {
