@@ -1,20 +1,26 @@
 const stateKey = 'ai-eazy-chat-state';
+const appShell = document.querySelector('.app-shell');
 const messageContainer = document.getElementById('messages');
-const chatList = document.getElementById('chat-list');
 const folderList = document.getElementById('folder-list');
-const chatNameInput = document.getElementById('chat-name');
-const personaInput = document.getElementById('persona');
 const promptInput = document.getElementById('prompt');
 const sendButton = document.getElementById('send');
 const newChatButton = document.getElementById('new-chat');
-const deleteChatButton = document.getElementById('delete-chat');
-const renameChatButton = document.getElementById('rename-chat');
-const modelSelect = document.getElementById('model');
 const fileInput = document.getElementById('file-input');
 const fileList = document.getElementById('file-list');
-const folderSelect = document.getElementById('chat-folder');
+const chatTitle = document.getElementById('chat-title');
+const chatFolderLabel = document.getElementById('chat-folder-label');
 const toast = document.getElementById('toast');
 const newFolderButton = document.getElementById('new-folder');
+const toggleSidebarButton = document.getElementById('sidebar-toggle');
+const settingsButton = document.getElementById('settings-button');
+const settingsOverlay = document.getElementById('settings-overlay');
+const settingsPersonaInput = document.getElementById('settings-persona');
+const settingsModelInput = document.getElementById('settings-model');
+const closeSettingsButtons = [
+  document.getElementById('close-settings'),
+  document.getElementById('close-settings-cta'),
+];
+let openChatMenuId = null;
 
 function uuid() {
   return crypto.randomUUID();
@@ -45,18 +51,35 @@ const defaultState = () => {
         id: chatId,
         name: 'New chat',
         folderId: 'root',
-        persona: '',
-        model: 'openrouter/auto',
         files: [],
         messages: [],
       },
     ],
     selectedChatId: chatId,
     selectedFolderId: defaultFolder.id,
+    sidebarHidden: false,
+    expandedFolders: { root: true },
+    settings: { persona: '', model: 'openrouter/auto' },
   };
 };
 
-let appState = loadState() || defaultState();
+const storedState = loadState();
+const baseDefaults = defaultState();
+const fallbackSettings =
+  storedState?.settings || {
+    persona: storedState?.chats?.[0]?.persona || '',
+    model: storedState?.chats?.[0]?.model || 'openrouter/auto',
+  };
+
+let appState = storedState
+  ? {
+      ...baseDefaults,
+      ...storedState,
+      sidebarHidden: storedState.sidebarHidden ?? false,
+      expandedFolders: { root: true, ...(storedState.expandedFolders || {}) },
+      settings: { ...baseDefaults.settings, ...fallbackSettings },
+    }
+  : baseDefaults;
 
 function setState(update) {
   appState = { ...appState, ...update };
@@ -65,7 +88,7 @@ function setState(update) {
 }
 
 function getSelectedChat() {
-  return appState.chats.find((c) => c.id === appState.selectedChatId);
+  return appState.chats.find((c) => c.id === appState.selectedChatId) || appState.chats[0];
 }
 
 function toastMessage(message, timeout = 2200) {
@@ -78,46 +101,118 @@ function renderFolders() {
   folderList.innerHTML = '';
   appState.folders.forEach((folder) => {
     const li = document.createElement('li');
-    li.textContent = folder.name;
-    li.className = folder.id === appState.selectedFolderId ? 'active' : '';
-    li.onclick = () => setState({ selectedFolderId: folder.id });
+    li.className = 'folder-item';
+
+    const header = document.createElement('div');
+    header.className = 'folder-header';
+    if (folder.id === appState.selectedFolderId) {
+      header.classList.add('active');
+    }
+    const toggle = document.createElement('button');
+    toggle.className = 'ghost icon folder-toggle';
+    toggle.textContent = appState.expandedFolders[folder.id] === false ? '▸' : '▾';
+    toggle.onclick = (e) => {
+      e.stopPropagation();
+      setState({
+        expandedFolders: {
+          ...appState.expandedFolders,
+          [folder.id]: !(appState.expandedFolders[folder.id] === false),
+        },
+      });
+    };
+
+    const title = document.createElement('span');
+    title.textContent = folder.name;
+    header.appendChild(toggle);
+    header.appendChild(title);
+
+    header.onclick = () => setState({ selectedFolderId: folder.id });
+
+    const chatsList = document.createElement('ul');
+    chatsList.className = 'chat-list';
+    chatsList.style.display = appState.expandedFolders[folder.id] === false ? 'none' : 'flex';
+
+    const chats = appState.chats.filter((chat) => chat.folderId === folder.id);
+    chats.forEach((chat) => {
+      const chatItem = document.createElement('li');
+      chatItem.className = chat.id === appState.selectedChatId ? 'active chat-row' : 'chat-row';
+      chatItem.onclick = () => setState({ selectedChatId: chat.id });
+
+      const info = document.createElement('div');
+      info.className = 'chat-row-main';
+      const name = document.createElement('span');
+      name.textContent = chat.name;
+      info.appendChild(name);
+
+      const menuButton = document.createElement('button');
+      menuButton.className = 'ghost icon chat-menu-trigger';
+      menuButton.textContent = '⋯';
+      menuButton.onclick = (e) => {
+        e.stopPropagation();
+        openChatMenuId = openChatMenuId === chat.id ? null : chat.id;
+        renderFolders();
+      };
+
+      const menu = document.createElement('div');
+      menu.className = 'chat-menu';
+      if (openChatMenuId === chat.id) {
+        menu.classList.add('show');
+      }
+
+      const renameBtn = document.createElement('button');
+      renameBtn.textContent = 'Rename';
+      renameBtn.onclick = (e) => {
+        e.stopPropagation();
+        renameChat(chat.id);
+      };
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.className = 'danger';
+      deleteBtn.onclick = (e) => {
+        e.stopPropagation();
+        removeChat(chat.id);
+      };
+
+      const moveWrap = document.createElement('div');
+      moveWrap.className = 'move-row';
+      const moveLabel = document.createElement('span');
+      moveLabel.textContent = 'Move to:';
+      const moveSelect = document.createElement('select');
+      appState.folders.forEach((f) => {
+        const option = document.createElement('option');
+        option.value = f.id;
+        option.textContent = f.name;
+        option.selected = f.id === chat.folderId;
+        moveSelect.appendChild(option);
+      });
+      moveSelect.onchange = (e) => {
+        e.stopPropagation();
+        moveChat(chat.id, e.target.value);
+      };
+      moveWrap.appendChild(moveLabel);
+      moveWrap.appendChild(moveSelect);
+
+      menu.appendChild(renameBtn);
+      menu.appendChild(deleteBtn);
+      menu.appendChild(moveWrap);
+
+      chatItem.appendChild(info);
+      chatItem.appendChild(menuButton);
+      chatItem.appendChild(menu);
+      chatsList.appendChild(chatItem);
+    });
+
+    li.appendChild(header);
+    li.appendChild(chatsList);
     folderList.appendChild(li);
-  });
-
-  folderSelect.innerHTML = '';
-  appState.folders.forEach((folder) => {
-    const option = document.createElement('option');
-    option.value = folder.id;
-    option.textContent = folder.name;
-    folderSelect.appendChild(option);
-  });
-}
-
-function renderChats() {
-  chatList.innerHTML = '';
-  const chats = appState.chats.filter((chat) => {
-    if (!appState.selectedFolderId || appState.selectedFolderId === 'root') return true;
-    return chat.folderId === appState.selectedFolderId;
-  });
-  chats.forEach((chat) => {
-    const li = document.createElement('li');
-    li.className = chat.id === appState.selectedChatId ? 'active' : '';
-    li.onclick = () => setState({ selectedChatId: chat.id });
-    const name = document.createElement('span');
-    name.textContent = chat.name;
-    const folder = appState.folders.find((f) => f.id === chat.folderId);
-    const badge = document.createElement('span');
-    badge.className = 'muted';
-    badge.textContent = folder ? folder.name : 'Unsorted';
-    li.appendChild(name);
-    li.appendChild(badge);
-    chatList.appendChild(li);
   });
 }
 
 function renderMessages() {
   messageContainer.innerHTML = '';
   const chat = getSelectedChat();
+  if (!chat) return;
   chat.messages.forEach((msg) => {
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
@@ -129,10 +224,10 @@ function renderMessages() {
 
 function renderChatMeta() {
   const chat = getSelectedChat();
-  chatNameInput.value = chat.name;
-  personaInput.value = chat.persona || '';
-  modelSelect.value = chat.model || 'openrouter/auto';
-  folderSelect.value = chat.folderId || 'root';
+  if (!chat) return;
+  chatTitle.textContent = chat.name;
+  const folder = appState.folders.find((f) => f.id === chat.folderId);
+  chatFolderLabel.textContent = folder ? folder.name : 'Unsorted';
   renderFiles();
 }
 
@@ -153,10 +248,14 @@ function renderFiles() {
 }
 
 function render() {
+  appShell.classList.toggle('sidebar-hidden', appState.sidebarHidden);
   renderFolders();
-  renderChats();
   renderMessages();
   renderChatMeta();
+  toggleSidebarButton.textContent = appState.sidebarHidden ? '☰' : '⟨';
+  toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
+  settingsPersonaInput.value = appState.settings.persona || '';
+  settingsModelInput.value = appState.settings.model || 'openrouter/auto';
 }
 
 function addChat(folderId) {
@@ -164,8 +263,6 @@ function addChat(folderId) {
     id: uuid(),
     name: 'Untitled chat',
     folderId: folderId || 'root',
-    persona: '',
-    model: 'openrouter/auto',
     files: [],
     messages: [],
   };
@@ -175,24 +272,29 @@ function addChat(folderId) {
   });
 }
 
-function removeChat() {
+function removeChat(chatId) {
   if (!confirm('Delete this chat?')) return;
-  const remaining = appState.chats.filter((c) => c.id !== appState.selectedChatId);
+  const remaining = appState.chats.filter((c) => c.id !== chatId);
   if (!remaining.length) {
     setState(defaultState());
     toastMessage('Chat deleted. Created a fresh chat.');
     return;
   }
-  setState({ chats: remaining, selectedChatId: remaining[0].id });
+  const newSelected =
+    chatId === appState.selectedChatId ? remaining[0].id : appState.selectedChatId;
+  openChatMenuId = null;
+  setState({ chats: remaining, selectedChatId: newSelected });
   toastMessage('Chat deleted');
 }
 
-function renameChat() {
-  const name = prompt('New chat name?', getSelectedChat().name);
+function renameChat(chatId) {
+  const chat = appState.chats.find((c) => c.id === chatId);
+  const name = prompt('New chat name?', chat?.name || '');
   if (!name) return;
   const chats = appState.chats.map((chat) =>
-    chat.id === appState.selectedChatId ? { ...chat, name } : chat,
+    chat.id === chatId ? { ...chat, name } : chat,
   );
+  openChatMenuId = null;
   setState({ chats });
 }
 
@@ -200,7 +302,11 @@ function addFolder() {
   const name = prompt('Folder name');
   if (!name) return;
   const folder = { id: uuid(), name };
-  setState({ folders: [...appState.folders, folder], selectedFolderId: folder.id });
+  setState({
+    folders: [...appState.folders, folder],
+    selectedFolderId: folder.id,
+    expandedFolders: { ...appState.expandedFolders, [folder.id]: true },
+  });
 }
 
 function removeFile(fileId) {
@@ -217,8 +323,17 @@ function persistChatUpdates(partial) {
   setState({ chats });
 }
 
+function moveChat(chatId, folderId) {
+  const chats = appState.chats.map((chat) =>
+    chat.id === chatId ? { ...chat, folderId } : chat,
+  );
+  openChatMenuId = null;
+  setState({ chats, selectedFolderId: folderId });
+}
+
 async function handleSend() {
   const chat = getSelectedChat();
+  if (!chat) return;
   const content = promptInput.value.trim();
   if (!content) return;
   promptInput.value = '';
@@ -232,8 +347,8 @@ async function handleSend() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [...chat.messages, userMessage].map(({ role, content }) => ({ role, content })),
-        model: chat.model,
-        persona: chat.persona,
+        model: appState.settings.model,
+        persona: appState.settings.persona,
         files: chat.files,
       }),
     });
@@ -254,6 +369,7 @@ async function handleSend() {
 function handleFileUpload(event) {
   const files = Array.from(event.target.files || []);
   const chat = getSelectedChat();
+  if (!chat) return;
   const readerPromises = files.map((file) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -272,22 +388,6 @@ function handleFileUpload(event) {
     .catch(() => toastMessage('Failed to read file'));
 }
 
-chatNameInput.addEventListener('input', (e) => {
-  persistChatUpdates({ name: e.target.value || 'Untitled chat' });
-});
-
-personaInput.addEventListener('input', (e) => {
-  persistChatUpdates({ persona: e.target.value });
-});
-
-modelSelect.addEventListener('change', (e) => {
-  persistChatUpdates({ model: e.target.value });
-});
-
-folderSelect.addEventListener('change', (e) => {
-  persistChatUpdates({ folderId: e.target.value });
-});
-
 promptInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
     handleSend();
@@ -296,10 +396,34 @@ promptInput.addEventListener('keydown', (e) => {
 
 sendButton.addEventListener('click', handleSend);
 newChatButton.addEventListener('click', () => addChat(appState.selectedFolderId || 'root'));
-deleteChatButton.addEventListener('click', removeChat);
-renameChatButton.addEventListener('click', renameChat);
 fileInput.addEventListener('change', handleFileUpload);
 newFolderButton.addEventListener('click', addFolder);
+toggleSidebarButton.addEventListener('click', () => setState({ sidebarHidden: !appState.sidebarHidden }));
+settingsButton.addEventListener('click', () => {
+  settingsOverlay.classList.add('show');
+  settingsPersonaInput.focus();
+});
+settingsOverlay.addEventListener('click', (e) => {
+  if (e.target === settingsOverlay) {
+    settingsOverlay.classList.remove('show');
+  }
+});
+closeSettingsButtons.forEach((btn) =>
+  btn.addEventListener('click', () => settingsOverlay.classList.remove('show')),
+);
+settingsPersonaInput.addEventListener('input', (e) => {
+  setState({ settings: { ...appState.settings, persona: e.target.value } });
+});
+settingsModelInput.addEventListener('input', (e) => {
+  setState({ settings: { ...appState.settings, model: e.target.value } });
+});
+
+document.addEventListener('click', () => {
+  if (openChatMenuId) {
+    openChatMenuId = null;
+    renderFolders();
+  }
+});
 
 render();
 toastMessage('Ready to chat! Upload files or set a persona before sending.');
