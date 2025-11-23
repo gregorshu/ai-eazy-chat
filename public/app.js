@@ -213,10 +213,33 @@ function renderMessages() {
   messageContainer.innerHTML = '';
   const chat = getSelectedChat();
   if (!chat) return;
-  chat.messages.forEach((msg) => {
+  chat.messages.forEach((msg, index) => {
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
-    div.textContent = msg.content;
+
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    content.textContent = msg.content;
+    div.appendChild(content);
+
+    const isLastMessage = index === chat.messages.length - 1;
+    const isRetryableAssistant = msg.role === 'assistant' && isLastMessage;
+    const isRetryableUser = msg.role === 'user' && isLastMessage;
+
+    if (isRetryableAssistant || isRetryableUser) {
+      const actions = document.createElement('div');
+      actions.className = 'message-actions';
+
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'ghost icon retry-button';
+      retryBtn.title = 'Retry last response';
+      retryBtn.textContent = '↻';
+      retryBtn.onclick = retryLastMessage;
+
+      actions.appendChild(retryBtn);
+      div.appendChild(actions);
+    }
+
     messageContainer.appendChild(div);
   });
   messageContainer.scrollTop = messageContainer.scrollHeight;
@@ -338,15 +361,23 @@ async function handleSend() {
   if (!content) return;
   promptInput.value = '';
   const userMessage = { role: 'user', content };
+  const messageHistory = [...chat.messages, userMessage];
+  sendChatCompletion(messageHistory);
+}
+
+async function sendChatCompletion(messageHistory) {
+  const chat = getSelectedChat();
+  if (!chat || !messageHistory.length) return;
+
   const pendingMessage = { role: 'assistant', content: 'Thinking…' };
-  persistChatUpdates({ messages: [...chat.messages, userMessage, pendingMessage] });
+  persistChatUpdates({ messages: [...messageHistory, pendingMessage] });
 
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [...chat.messages, userMessage].map(({ role, content }) => ({ role, content })),
+        messages: messageHistory.map(({ role, content }) => ({ role, content })),
         model: appState.settings.model,
         persona: appState.settings.persona,
         files: chat.files,
@@ -357,13 +388,32 @@ async function handleSend() {
       throw new Error(data.error || 'Failed to fetch response');
     }
     const assistantMessage = { role: 'assistant', content: data.content || '(no content returned)' };
-    const withoutPending = getSelectedChat().messages.slice(0, -1);
-    persistChatUpdates({ messages: [...withoutPending, assistantMessage] });
+    persistChatUpdates({ messages: [...messageHistory, assistantMessage] });
   } catch (err) {
-    const withoutPending = getSelectedChat().messages.slice(0, -1);
-    persistChatUpdates({ messages: withoutPending });
+    persistChatUpdates({ messages: messageHistory });
     toastMessage(err.message, 3200);
   }
+}
+
+function retryLastMessage() {
+  const chat = getSelectedChat();
+  if (!chat || !chat.messages.length) return;
+
+  let lastUserIndex = -1;
+  for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
+    if (chat.messages[i].role === 'user') {
+      lastUserIndex = i;
+      break;
+    }
+  }
+
+  if (lastUserIndex === -1) {
+    toastMessage('No user message to retry');
+    return;
+  }
+
+  const messageHistory = chat.messages.slice(0, lastUserIndex + 1);
+  sendChatCompletion(messageHistory);
 }
 
 function handleFileUpload(event) {
