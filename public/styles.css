@@ -1,13 +1,14 @@
 :root {
-  --bg: #0f172a;
-  --panel: #111827;
-  --card: #1f2937;
-  --muted: #94a3b8;
-  --text: #e2e8f0;
-  --accent: #06b6d4;
+  --bg: #050910;
+  --panel: #0c1220;
+  --card: #111827;
+  --muted: #9ca3af;
+  --text: #e5e7eb;
+  --accent: #10a37f;
   --danger: #f87171;
-  --border: #1e293b;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  --border: #1f2937;
+  --shadow: 0 16px 50px rgba(0, 0, 0, 0.45);
+  --glow: 0 0 0 1px rgba(16, 163, 127, 0.25), 0 12px 40px rgba(0, 0, 0, 0.35);
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: var(--text);
 }
@@ -19,8 +20,8 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at 10% 20%, rgba(14, 165, 233, 0.08), transparent 25%),
-    radial-gradient(circle at 90% 30%, rgba(109, 40, 217, 0.08), transparent 25%),
+  background: radial-gradient(circle at 8% 20%, rgba(16, 163, 127, 0.12), transparent 24%),
+    radial-gradient(circle at 90% 10%, rgba(79, 70, 229, 0.12), transparent 26%),
     var(--bg);
   color: var(--text);
   overflow: hidden;
@@ -34,8 +35,8 @@ body {
   border-radius: 50%;
   width: 46px;
   height: 46px;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--glow);
 }
 
 .app-shell {
@@ -49,8 +50,8 @@ body {
 }
 
 .sidebar {
-  background: linear-gradient(180deg, #0b1222 0%, #0c1324 100%);
-  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, #080d19 0%, #0b1222 100%);
+  border-right: 1px solid #111827;
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -74,8 +75,8 @@ body {
   display: grid;
   place-items: center;
   border-radius: 12px;
-  background: linear-gradient(135deg, #22d3ee, #6366f1);
-  box-shadow: var(--shadow);
+  background: linear-gradient(135deg, #10a37f, #3b82f6);
+  box-shadow: var(--glow);
   font-size: 20px;
 }
 
@@ -229,15 +230,15 @@ button {
 }
 
 button:hover {
-  border-color: var(--accent);
-  transform: translateY(-1px);
+  border-color: rgba(16, 163, 127, 0.6);
+  box-shadow: var(--glow);
 }
 
 button.primary {
-  background: linear-gradient(135deg, #22d3ee, #6366f1);
+  background: linear-gradient(135deg, #10a37f, #22c55e);
   border: none;
-  color: #0b1120;
-  box-shadow: var(--shadow);
+  color: #04140e;
+  box-shadow: var(--glow);
 }
 
 button.ghost {
@@ -283,7 +284,8 @@ button.danger {
 }
 
 .workspace {
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.7) 0%, rgba(12, 18, 32, 0.95) 100%);
+  background: radial-gradient(circle at 20% 20%, rgba(16, 163, 127, 0.08), transparent 32%),
+    linear-gradient(180deg, #0b1020 0%, #070b15 100%);
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -333,12 +335,22 @@ button.icon {
   font-size: 18px;
 }
 
+button:focus-visible,
+.text-input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgba(16, 163, 127, 0.7);
+  outline-offset: 2px;
+  border-color: rgba(16, 163, 127, 0.8);
+  box-shadow: var(--glow);
+}
+
 .text-input,
 .select-input,
 textarea {
   width: 100%;
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   color: var(--text);
   padding: 10px 12px;
@@ -347,6 +359,11 @@ textarea {
 
 textarea {
   resize: vertical;
+}
+
+.text-input::placeholder,
+textarea::placeholder {
+  color: rgba(255, 255, 255, 0.4);
 }
 
 .attachments {
@@ -364,7 +381,7 @@ textarea {
 .file-label {
   padding: 10px 12px;
   background: var(--card);
-  border: 1px dashed var(--accent);
+  border: 1px dashed rgba(16, 163, 127, 0.5);
   border-radius: 10px;
   cursor: pointer;
 }
@@ -381,9 +398,9 @@ textarea {
 .pill {
   padding: 8px 10px;
   border-radius: 999px;
-  background: rgba(34, 211, 238, 0.1);
-  border: 1px solid rgba(34, 211, 238, 0.4);
-  color: #a5f3fc;
+  background: rgba(16, 163, 127, 0.12);
+  border: 1px solid rgba(16, 163, 127, 0.45);
+  color: #a7f3d0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -408,26 +425,47 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding-bottom: 12px;
 }
 
 .message {
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--card);
-  border: 1px solid var(--border);
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.01) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   max-width: 900px;
   white-space: pre-wrap;
   line-height: 1.6;
+  box-shadow: var(--shadow);
 }
 
 .message.user {
   align-self: flex-end;
-  background: linear-gradient(135deg, rgba(34, 211, 238, 0.2), rgba(99, 102, 241, 0.2));
-  border-color: rgba(34, 211, 238, 0.4);
+  background: linear-gradient(135deg, rgba(16, 163, 127, 0.18), rgba(34, 197, 94, 0.16));
+  border-color: rgba(16, 163, 127, 0.45);
 }
 
 .message.assistant {
   align-self: flex-start;
+}
+
+.message-content {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.message-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.retry-button {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  height: 34px;
+  width: 34px;
+  color: var(--text);
 }
 
 .composer {
