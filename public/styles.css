@@ -60,7 +60,11 @@ body {
 }
 
 .app-shell.sidebar-hidden .sidebar {
-  display: none;
+  width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  overflow: hidden;
 }
 
 .brand {
@@ -488,8 +492,18 @@ textarea::placeholder {
 
 .composer-box {
   display: grid;
-  grid-template-columns: 1fr 120px;
+  grid-template-columns: 1fr 120px 110px;
   gap: 10px;
+}
+
+#send,
+#cancel {
+  height: 100%;
+}
+
+#cancel {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--muted);
 }
 
 .model-field {
