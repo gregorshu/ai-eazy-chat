@@ -5,11 +5,10 @@ const messageContainer = document.getElementById('messages');
 const folderList = document.getElementById('folder-list');
 const promptInput = document.getElementById('prompt');
 const sendButton = document.getElementById('send');
+const cancelButton = document.getElementById('cancel');
 const newChatButton = document.getElementById('new-chat');
 const fileInput = document.getElementById('file-input');
 const fileList = document.getElementById('file-list');
-const chatTitle = document.getElementById('chat-title');
-const chatFolderLabel = document.getElementById('chat-folder-label');
 const toast = document.getElementById('toast');
 const newFolderButton = document.getElementById('new-folder');
 const toggleSidebarButton = document.getElementById('sidebar-toggle');
@@ -23,6 +22,8 @@ const closeSettingsButtons = [
 ];
 let openChatMenuId = null;
 const retryDelays = [3000, 5000, 7000];
+let activeAbortController = null;
+let isRequestPending = false;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -217,6 +218,7 @@ function renderMessages() {
   messageContainer.innerHTML = '';
   const chat = getSelectedChat();
   if (!chat) return;
+  const lastUserIndex = findLastUserIndex(chat.messages);
   chat.messages.forEach((msg, index) => {
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
@@ -226,11 +228,9 @@ function renderMessages() {
     content.textContent = msg.content;
     div.appendChild(content);
 
-    const isLastMessage = index === chat.messages.length - 1;
-    const isRetryableAssistant = msg.role === 'assistant' && isLastMessage;
-    const isRetryableUser = msg.role === 'user' && isLastMessage;
+    const isLastUserMessage = index === lastUserIndex;
 
-    if (isRetryableAssistant || isRetryableUser) {
+    if (isLastUserMessage) {
       const actions = document.createElement('div');
       actions.className = 'message-actions';
 
@@ -242,30 +242,18 @@ function renderMessages() {
 
       actions.appendChild(retryBtn);
 
-      const lastUserIndex = findLastUserIndex(chat.messages);
-      if (lastUserIndex !== -1) {
-        const editBtn = document.createElement('button');
-        editBtn.className = 'ghost icon edit-button';
-        editBtn.title = 'Edit your last message';
-        editBtn.textContent = '✎';
-        editBtn.onclick = editLastUserMessage;
-        actions.appendChild(editBtn);
-      }
+      const editBtn = document.createElement('button');
+      editBtn.className = 'ghost icon edit-button';
+      editBtn.title = 'Edit your last message';
+      editBtn.textContent = '✎';
+      editBtn.onclick = editLastUserMessage;
+      actions.appendChild(editBtn);
       div.appendChild(actions);
     }
 
     messageContainer.appendChild(div);
   });
   messageContainer.scrollTop = messageContainer.scrollHeight;
-}
-
-function renderChatMeta() {
-  const chat = getSelectedChat();
-  if (!chat) return;
-  chatTitle.textContent = chat.name;
-  const folder = appState.folders.find((f) => f.id === chat.folderId);
-  chatFolderLabel.textContent = folder ? folder.name : 'Unsorted';
-  renderFiles();
 }
 
 function renderFiles() {
@@ -289,7 +277,7 @@ function render() {
   sidebar?.setAttribute('aria-hidden', appState.sidebarHidden ? 'true' : 'false');
   renderFolders();
   renderMessages();
-  renderChatMeta();
+  renderFiles();
   toggleSidebarButton.textContent = appState.sidebarHidden ? '☰' : '⟨';
   toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
   settingsPersonaInput.value = appState.settings.persona || '';
@@ -383,10 +371,20 @@ async function handleSend() {
   if (!chat) return;
   const content = promptInput.value.trim();
   if (!content) return;
+  if (isRequestPending) {
+    toastMessage('Please cancel or wait for the current response first');
+    return;
+  }
   promptInput.value = '';
   const userMessage = { role: 'user', content };
   const messageHistory = [...chat.messages, userMessage];
   sendChatCompletion(messageHistory);
+}
+
+function setRequestPending(pending) {
+  isRequestPending = pending;
+  sendButton.disabled = pending;
+  cancelButton.disabled = !pending;
 }
 
 async function sendChatCompletion(messageHistory) {
@@ -395,22 +393,36 @@ async function sendChatCompletion(messageHistory) {
 
   const pendingMessage = { role: 'assistant', content: 'Thinking…' };
   persistChatUpdates({ messages: [...messageHistory, pendingMessage] });
+  const controller = new AbortController();
+  activeAbortController = controller;
+  setRequestPending(true);
 
   try {
-    const data = await performChatRequest({ chat, messageHistory });
+    const data = await performChatRequest({ chat, messageHistory, signal: controller.signal });
     const assistantMessage = { role: 'assistant', content: data.content || '(no content returned)' };
     persistChatUpdates({ messages: [...messageHistory, assistantMessage] });
   } catch (err) {
+    if (err.name === 'AbortError') {
+      persistChatUpdates({ messages: messageHistory });
+      toastMessage('Request canceled');
+      return;
+    }
     persistChatUpdates({ messages: messageHistory });
     toastMessage(err.message, 3200);
+  } finally {
+    if (activeAbortController === controller) {
+      activeAbortController = null;
+    }
+    setRequestPending(false);
   }
 }
 
-async function performChatRequest({ chat, messageHistory }) {
+async function performChatRequest({ chat, messageHistory, signal }) {
   for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal,
       body: JSON.stringify({
         messages: messageHistory.map(({ role, content }) => ({ role, content })),
         model: appState.settings.model,
@@ -488,6 +500,12 @@ function editLastUserMessage() {
   toastMessage('Updated last message. Use retry to resend.');
 }
 
+function cancelActiveRequest() {
+  if (activeAbortController) {
+    activeAbortController.abort();
+  }
+}
+
 function handleFileUpload(event) {
   const files = Array.from(event.target.files || []);
   const chat = getSelectedChat();
@@ -517,6 +535,7 @@ promptInput.addEventListener('keydown', (e) => {
 });
 
 sendButton.addEventListener('click', handleSend);
+cancelButton.addEventListener('click', cancelActiveRequest);
 newChatButton.addEventListener('click', () => addChat(appState.selectedFolderId || 'root'));
 fileInput.addEventListener('change', handleFileUpload);
 newFolderButton.addEventListener('click', addFolder);

@@ -28,14 +28,6 @@
         </section>
       </aside>
       <main class="workspace">
-        <header class="workspace-header">
-          <div class="header-left">
-            <div class="chat-title">
-              <h2 id="chat-title">Chat</h2>
-              <p id="chat-folder-label" class="muted"></p>
-            </div>
-          </div>
-        </header>
         <section class="attachments">
           <div class="attachment-header">
             <div>
@@ -54,6 +46,7 @@
           <div class="composer-box">
             <textarea id="prompt" rows="3" placeholder="Write your message..."></textarea>
             <button id="send" class="primary">Send</button>
+            <button id="cancel" class="ghost" aria-label="Cancel request" disabled>Cancel</button>
           </div>
         </footer>
       </main>
