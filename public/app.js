@@ -231,9 +231,11 @@ function renderFolders() {
     };
 
     const hasChats = appState.chats.some((chat) => chat.folderId === folder.id);
-    if (folder.id === 'root' || hasChats) {
+    if (folder.id === 'root') {
       deleteBtn.disabled = true;
-      deleteBtn.title = folder.id === 'root' ? 'Default folder cannot be deleted' : 'Move chats out before deleting';
+      deleteBtn.title = 'Default folder cannot be deleted';
+    } else if (hasChats) {
+      deleteBtn.title = 'Move chats out before deleting';
     }
 
     actions.appendChild(editBtn);
@@ -706,7 +708,14 @@ function removeFolder(folderId) {
   if (!folder) return;
   const hasChats = appState.chats.some((chat) => chat.folderId === folderId);
   if (hasChats) {
-    toastMessage('Move or delete chats before removing this folder');
+    openConfirmDialog({
+      title: 'Cannot delete folder',
+      context: 'Folders',
+      description: 'This folder contains chats. Move or delete them before removing the folder.',
+      confirmLabel: 'Got it',
+      confirmVariant: '',
+      onConfirm: () => {},
+    });
     return;
   }
   openConfirmDialog({
