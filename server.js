@@ -94,6 +94,7 @@ async function handleChat(req, res) {
   const systemPrompt = buildSystemPrompt(persona, files);
   const requestBody = JSON.stringify({
     model,
+    stream: true,
     messages: [{ role: 'system', content: systemPrompt }, ...messages],
   });
 
@@ -111,13 +112,46 @@ async function handleChat(req, res) {
   };
 
   const apiReq = https.request(options, (apiRes) => {
+    const statusCode = apiRes.statusCode || 500;
+    const contentType = apiRes.headers['content-type'] || '';
+
+    if (statusCode >= 400) {
+      let errorBody = '';
+      apiRes.on('data', (chunk) => (errorBody += chunk));
+      apiRes.on('end', () => {
+        sendJson(res, statusCode, { error: errorBody || 'Upstream error' });
+      });
+      return;
+    }
+
+    const isStream = contentType.includes('text/event-stream');
+    if (isStream) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      });
+
+      apiRes.on('data', (chunk) => {
+        res.write(chunk);
+      });
+
+      apiRes.on('end', () => {
+        res.end();
+      });
+
+      apiRes.on('error', (err) => {
+        if (!res.writableEnded) {
+          res.end();
+        }
+        console.error('Stream error', err);
+      });
+      return;
+    }
+
     let data = '';
     apiRes.on('data', (chunk) => (data += chunk));
     apiRes.on('end', () => {
-      if (apiRes.statusCode && apiRes.statusCode >= 400) {
-        sendJson(res, apiRes.statusCode, { error: data || 'Upstream error' });
-        return;
-      }
       try {
         const parsed = JSON.parse(data);
         const content = parsed?.choices?.[0]?.message?.content || '';
@@ -130,6 +164,10 @@ async function handleChat(req, res) {
 
   apiReq.on('error', (err) => {
     sendJson(res, 502, { error: err.message });
+  });
+
+  req.on('aborted', () => {
+    apiReq.destroy();
   });
 
   apiReq.write(requestBody);
