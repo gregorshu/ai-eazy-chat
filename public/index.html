@@ -7,25 +7,27 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <button id="sidebar-toggle" class="ghost icon sidebar-toggle" aria-label="Hide menu">☰</button>
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="brand">
-          <div class="logo">🤖</div>
-          <div>
-            <h1>AI Eazy Chat</h1>
-            <p class="muted">Multi-chat workspace</p>
+        <button id="sidebar-toggle" class="ghost icon sidebar-toggle" aria-label="Hide menu">☰</button>
+        <div class="sidebar-content">
+          <div class="brand">
+            <div class="logo">🤖</div>
+            <div>
+              <h1>AI Eazy Chat</h1>
+              <p class="muted">Multi-chat workspace</p>
+            </div>
           </div>
+          <div class="controls">
+            <button id="new-folder" class="ghost">+ Folder</button>
+            <button id="new-chat" class="primary">+ New Chat</button>
+            <button id="settings-button" class="ghost icon" aria-label="Settings">⚙</button>
+          </div>
+          <section class="folders">
+            <div class="section-title">Folders</div>
+            <ul id="folder-list" class="folder-list"></ul>
+          </section>
         </div>
-        <div class="controls">
-          <button id="new-folder" class="ghost">+ Folder</button>
-          <button id="new-chat" class="primary">+ New Chat</button>
-          <button id="settings-button" class="ghost icon" aria-label="Settings">⚙</button>
-        </div>
-        <section class="folders">
-          <div class="section-title">Folders</div>
-          <ul id="folder-list" class="folder-list"></ul>
-        </section>
       </aside>
       <main class="workspace">
         <section class="attachments">
