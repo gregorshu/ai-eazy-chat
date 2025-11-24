@@ -722,6 +722,19 @@ textarea::placeholder {
   gap: 6px;
 }
 
+.label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.label-row button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .label {
   font-size: 13px;
   color: var(--muted);

@@ -21,6 +21,8 @@ const closeFolderButton = document.getElementById('close-folder');
 const settingsOverlay = document.getElementById('settings-overlay');
 const settingsPersonaInput = document.getElementById('settings-persona');
 const settingsModelInput = document.getElementById('settings-model');
+const modelOptionsList = document.getElementById('model-options');
+const refreshModelsButton = document.getElementById('refresh-models');
 const closeSettingsButtons = [
   document.getElementById('close-settings'),
   document.getElementById('close-settings-cta'),
@@ -60,6 +62,12 @@ function saveState(state) {
   localStorage.setItem(stateKey, JSON.stringify(state));
 }
 
+const defaultModelOptions = [
+  'openrouter/auto',
+  'anthropic/claude-3-sonnet',
+  'openai/gpt-4o-mini',
+];
+
 const defaultState = () => {
   const defaultFolder = { id: 'root', name: 'Unsorted' };
   const chatId = uuid();
@@ -88,6 +96,8 @@ const defaultState = () => {
     sidebarHidden: false,
     expandedFolders: { root: true },
     settings: { persona: '', model: 'openrouter/auto' },
+    modelOptions: defaultModelOptions,
+    modelOptionsLoading: false,
   };
 };
 
@@ -114,6 +124,8 @@ let appState = storedState
       editingMessageDraft: '',
       newFolderModalOpen: false,
       newFolderDraft: '',
+      modelOptions: storedState.modelOptions || defaultModelOptions,
+      modelOptionsLoading: false,
       settings: { ...baseDefaults.settings, ...fallbackSettings },
     }
   : baseDefaults;
@@ -539,12 +551,32 @@ function renderFiles() {
   });
 }
 
+function renderModelOptions() {
+  const fragment = document.createDocumentFragment();
+  const options = appState.modelOptions?.length ? appState.modelOptions : defaultModelOptions;
+
+  options.forEach((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    fragment.appendChild(option);
+  });
+
+  modelOptionsList.innerHTML = '';
+  modelOptionsList.appendChild(fragment);
+
+  if (refreshModelsButton) {
+    refreshModelsButton.disabled = appState.modelOptionsLoading;
+    refreshModelsButton.textContent = appState.modelOptionsLoading ? 'Refreshing…' : 'Refresh list';
+  }
+}
+
 function render() {
   appShell.classList.toggle('sidebar-hidden', appState.sidebarHidden);
   sidebar?.setAttribute('aria-hidden', appState.sidebarHidden ? 'true' : 'false');
   renderFolders();
   renderMessages();
   renderFiles();
+  renderModelOptions();
   toggleSidebarButton.textContent = appState.sidebarHidden ? '⟩' : '⟨';
   toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
   settingsPersonaInput.value = appState.settings.persona || '';
@@ -933,6 +965,35 @@ async function performChatRequest({ chat, messageHistory, signal, onChunk }) {
   throw new Error('Failed to fetch response');
 }
 
+async function refreshModelOptions() {
+  if (appState.modelOptionsLoading) return;
+  setState({ modelOptionsLoading: true });
+
+  try {
+    const response = await fetch('/api/models');
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data?.error || `Unable to refresh models (status ${response.status})`);
+    }
+
+    const models = Array.isArray(data?.models) ? data.models.filter(Boolean) : [];
+
+    if (!models.length) {
+      throw new Error('No models returned from OpenRouter');
+    }
+
+    const uniqueModels = Array.from(new Set([...models, ...defaultModelOptions]));
+
+    setState({ modelOptions: uniqueModels, modelOptionsLoading: false });
+    toastMessage('Model list refreshed');
+  } catch (err) {
+    console.error('Failed to refresh model options', err);
+    toastMessage(err.message || 'Failed to refresh model list');
+    setState({ modelOptionsLoading: false });
+  }
+}
+
 function retryLastMessage() {
   const chat = getSelectedChat();
   if (!chat || !chat.messages.length) return;
@@ -1056,6 +1117,9 @@ settingsOverlay.addEventListener('click', (e) => {
     settingsOverlay.classList.remove('show');
   }
 });
+refreshModelsButton.addEventListener('click', () => {
+  refreshModelOptions();
+});
 folderOverlay.addEventListener('click', (e) => {
   if (e.target === folderOverlay) {
     closeNewFolderModal();
@@ -1094,4 +1158,5 @@ document.addEventListener('click', (event) => {
 });
 
 render();
+refreshModelOptions();
 toastMessage('Ready to chat! Upload files or set a persona before sending.');

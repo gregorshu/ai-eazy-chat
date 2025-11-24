@@ -70,6 +70,61 @@ function buildSystemPrompt(persona, files = []) {
   return `${personaText}\nThe following files are in context:\n${fileSummaries}`;
 }
 
+function fetchOpenRouterModels() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      method: 'GET',
+      hostname: 'openrouter.ai',
+      path: '/api/v1/models',
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        'HTTP-Referer': 'http://localhost',
+        'X-Title': 'ai-eazy-chat',
+      },
+    };
+
+    const req = https.request(options, (apiRes) => {
+      let body = '';
+      apiRes.on('data', (chunk) => (body += chunk));
+      apiRes.on('end', () => {
+        if (apiRes.statusCode >= 400) {
+          const message = body || `OpenRouter responded with status ${apiRes.statusCode}`;
+          reject(new Error(message));
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const models = (parsed?.data || [])
+            .map((entry) => entry.id)
+            .filter(Boolean);
+          resolve(models);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function handleModels(req, res) {
+  if (!API_KEY) {
+    sendJson(res, 500, { error: 'OPENROUTER_API_KEY is not set on the server.' });
+    return;
+  }
+
+  try {
+    const models = await fetchOpenRouterModels();
+    sendJson(res, 200, { models });
+  } catch (err) {
+    console.error('Failed to fetch OpenRouter models', err);
+    sendJson(res, 502, { error: 'Failed to fetch model list from OpenRouter' });
+  }
+}
+
 async function handleChat(req, res) {
   if (!API_KEY) {
     sendJson(res, 500, { error: 'OPENROUTER_API_KEY is not set on the server.' });
@@ -178,6 +233,11 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === 'POST' && url.pathname === '/api/chat') {
     handleChat(req, res);
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/models') {
+    handleModels(req, res);
     return;
   }
 

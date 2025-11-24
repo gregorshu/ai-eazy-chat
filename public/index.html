@@ -92,18 +92,17 @@
         </div>
         <div class="modal-body">
           <label class="stack" for="settings-model">
-            <span class="label">Model</span>
+            <div class="label-row">
+              <span class="label">Model</span>
+              <button id="refresh-models" class="ghost" type="button">Refresh list</button>
+            </div>
             <input
               id="settings-model"
               class="text-input"
               list="model-options"
               placeholder="Model (type or pick a preset)"
             />
-            <datalist id="model-options">
-              <option value="openrouter/auto"></option>
-              <option value="anthropic/claude-3-sonnet"></option>
-              <option value="openai/gpt-4o-mini"></option>
-            </datalist>
+            <datalist id="model-options"></datalist>
           </label>
           <label class="stack" for="settings-persona">
             <span class="label">Persona / System prompt</span>
