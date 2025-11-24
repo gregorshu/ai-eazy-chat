@@ -336,6 +336,12 @@ button.primary {
   box-shadow: var(--glow);
 }
 
+button.primary.danger {
+  background: linear-gradient(135deg, #dc2626, #f97316);
+  color: #0f172a;
+  box-shadow: 0 10px 40px rgba(220, 38, 38, 0.35);
+}
+
 button.ghost {
   background: transparent;
 }
@@ -699,6 +705,10 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.confirm-message {
+  line-height: 1.5;
 }
 
 .modal-footer {

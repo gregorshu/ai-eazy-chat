@@ -25,11 +25,19 @@ const closeSettingsButtons = [
   document.getElementById('close-settings'),
   document.getElementById('close-settings-cta'),
 ];
+const confirmOverlay = document.getElementById('confirm-overlay');
+const confirmTitle = document.getElementById('confirm-title');
+const confirmMessage = document.getElementById('confirm-message');
+const confirmContext = document.getElementById('confirm-context');
+const confirmAction = document.getElementById('confirm-action');
+const cancelConfirmButton = document.getElementById('cancel-confirm');
+const closeConfirmButton = document.getElementById('close-confirm');
 let openChatMenuId = null;
 const retryDelays = [3000, 5000, 7000];
 let activeAbortController = null;
 let isRequestPending = false;
 let wasFolderModalOpen = false;
+let activeConfirmHandler = null;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -125,6 +133,46 @@ function toastMessage(message, timeout = 2200) {
   toast.classList.add('show');
   setTimeout(() => toast.classList.remove('show'), timeout);
 }
+
+function closeConfirmDialog() {
+  confirmOverlay.classList.remove('show');
+  activeConfirmHandler = null;
+}
+
+function openConfirmDialog({
+  title = 'Are you sure?',
+  description = '',
+  context = 'Confirm action',
+  confirmLabel = 'Confirm',
+  confirmVariant = 'danger',
+  onConfirm,
+}) {
+  confirmTitle.textContent = title;
+  confirmMessage.textContent = description;
+  confirmContext.textContent = context;
+  confirmAction.textContent = confirmLabel;
+  confirmAction.className = 'primary';
+  if (confirmVariant) {
+    confirmAction.classList.add(confirmVariant);
+  }
+  activeConfirmHandler = onConfirm;
+  confirmOverlay.classList.add('show');
+}
+
+confirmAction.onclick = () => {
+  if (typeof activeConfirmHandler === 'function') {
+    activeConfirmHandler();
+  }
+  closeConfirmDialog();
+};
+
+cancelConfirmButton.onclick = closeConfirmDialog;
+closeConfirmButton.onclick = closeConfirmDialog;
+confirmOverlay.addEventListener('click', (event) => {
+  if (event.target === confirmOverlay) {
+    closeConfirmDialog();
+  }
+});
 
 function renderFolders() {
   folderList.innerHTML = '';
@@ -523,38 +571,48 @@ function addChat(folderId) {
 }
 
 function removeChat(chatId) {
-  if (!confirm('Delete this chat?')) return;
-  const remaining = appState.chats.filter((c) => c.id !== chatId);
-  if (!remaining.length) {
-    const baseFolders = appState.folders.length
-      ? appState.folders
-      : [{ id: 'root', name: 'Unsorted' }];
-    const hasRoot = baseFolders.some((f) => f.id === 'root');
-    const folders = hasRoot ? baseFolders : [{ id: 'root', name: 'Unsorted' }, ...baseFolders];
-    const targetFolderId =
-      folders.find((f) => f.id === appState.selectedFolderId)?.id || 'root';
-    const chat = {
-      id: uuid(),
-      name: 'New chat',
-      folderId: targetFolderId,
-      files: [],
-      messages: [],
-    };
-    openChatMenuId = null;
-    setState({
-      chats: [chat],
-      selectedChatId: chat.id,
-      folders,
-      expandedFolders: { ...appState.expandedFolders, [targetFolderId]: true },
-    });
-    toastMessage('Chat deleted. Created a fresh chat.');
-    return;
-  }
-  const newSelected =
-    chatId === appState.selectedChatId ? remaining[0].id : appState.selectedChatId;
-  openChatMenuId = null;
-  setState({ chats: remaining, selectedChatId: newSelected });
-  toastMessage('Chat deleted');
+  const chat = appState.chats.find((entry) => entry.id === chatId);
+  if (!chat) return;
+  openConfirmDialog({
+    title: 'Delete chat',
+    context: 'Chats',
+    description: `Delete "${chat.name || 'Untitled chat'}"? This will remove all messages for this chat.`,
+    confirmLabel: 'Delete chat',
+    confirmVariant: 'danger',
+    onConfirm: () => {
+      const remaining = appState.chats.filter((c) => c.id !== chatId);
+      if (!remaining.length) {
+        const baseFolders = appState.folders.length
+          ? appState.folders
+          : [{ id: 'root', name: 'Unsorted' }];
+        const hasRoot = baseFolders.some((f) => f.id === 'root');
+        const folders = hasRoot ? baseFolders : [{ id: 'root', name: 'Unsorted' }, ...baseFolders];
+        const targetFolderId =
+          folders.find((f) => f.id === appState.selectedFolderId)?.id || 'root';
+        const newChat = {
+          id: uuid(),
+          name: 'New chat',
+          folderId: targetFolderId,
+          files: [],
+          messages: [],
+        };
+        openChatMenuId = null;
+        setState({
+          chats: [newChat],
+          selectedChatId: newChat.id,
+          folders,
+          expandedFolders: { ...appState.expandedFolders, [targetFolderId]: true },
+        });
+        toastMessage('Chat deleted. Created a fresh chat.');
+        return;
+      }
+      const newSelected =
+        chatId === appState.selectedChatId ? remaining[0].id : appState.selectedChatId;
+      openChatMenuId = null;
+      setState({ chats: remaining, selectedChatId: newSelected });
+      toastMessage('Chat deleted');
+    },
+  });
 }
 
 function renameChat(chatId) {
@@ -644,21 +702,33 @@ function removeFolder(folderId) {
     toastMessage('Default folder cannot be deleted');
     return;
   }
+  const folder = appState.folders.find((entry) => entry.id === folderId);
+  if (!folder) return;
   const hasChats = appState.chats.some((chat) => chat.folderId === folderId);
   if (hasChats) {
     toastMessage('Move or delete chats before removing this folder');
     return;
   }
-  const folders = appState.folders.filter((folder) => folder.id !== folderId);
-  const selectedFolderId =
-    appState.selectedFolderId === folderId ? 'root' : appState.selectedFolderId;
-  const expandedFolders = { ...appState.expandedFolders };
-  delete expandedFolders[folderId];
-  const editingFolderState =
-    appState.editingFolderId === folderId
-      ? { editingFolderId: null, editingFolderDraft: '' }
-      : {};
-  setState({ folders, selectedFolderId, expandedFolders, ...editingFolderState });
+  openConfirmDialog({
+    title: 'Delete folder',
+    context: 'Folders',
+    description: `Are you sure you want to delete "${folder.name}"? This action cannot be undone.`,
+    confirmLabel: 'Delete folder',
+    confirmVariant: 'danger',
+    onConfirm: () => {
+      const folders = appState.folders.filter((entry) => entry.id !== folderId);
+      const selectedFolderId =
+        appState.selectedFolderId === folderId ? 'root' : appState.selectedFolderId;
+      const expandedFolders = { ...appState.expandedFolders };
+      delete expandedFolders[folderId];
+      const editingFolderState =
+        appState.editingFolderId === folderId
+          ? { editingFolderId: null, editingFolderDraft: '' }
+          : {};
+      setState({ folders, selectedFolderId, expandedFolders, ...editingFolderState });
+      toastMessage('Folder deleted');
+    },
+  });
 }
 
 function removeFile(fileId) {
