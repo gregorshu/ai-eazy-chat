@@ -186,6 +186,18 @@ body {
   width: 100%;
 }
 
+.chat-menu .rename-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rename-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .folder-list {
   list-style: none;
   padding: 0;
@@ -456,6 +468,28 @@ textarea::placeholder {
 .message-content {
   color: var(--text);
   font-size: 15px;
+}
+
+.message-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-edit textarea {
+  width: 100%;
+  min-height: 120px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.message-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .message-actions {

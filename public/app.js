@@ -60,6 +60,11 @@ const defaultState = () => {
         messages: [],
       },
     ],
+    editingChatId: null,
+    editingChatDraft: '',
+    editingMessageChatId: null,
+    editingMessageIndex: null,
+    editingMessageDraft: '',
     selectedChatId: chatId,
     selectedFolderId: defaultFolder.id,
     sidebarHidden: false,
@@ -82,6 +87,11 @@ let appState = storedState
       ...storedState,
       sidebarHidden: storedState.sidebarHidden ?? false,
       expandedFolders: { root: true, ...(storedState.expandedFolders || {}) },
+      editingChatId: null,
+      editingChatDraft: '',
+      editingMessageChatId: null,
+      editingMessageIndex: null,
+      editingMessageDraft: '',
       settings: { ...baseDefaults.settings, ...fallbackSettings },
     }
   : baseDefaults;
@@ -168,7 +178,7 @@ function renderFolders() {
       renameBtn.textContent = 'Rename';
       renameBtn.onclick = (e) => {
         e.stopPropagation();
-        renameChat(chat.id);
+        startChatRename(chat);
       };
 
       const deleteBtn = document.createElement('button');
@@ -195,10 +205,55 @@ function renderFolders() {
         e.stopPropagation();
         moveChat(chat.id, e.target.value);
       };
+      moveSelect.onclick = (e) => e.stopPropagation();
+      moveSelect.onmousedown = (e) => e.stopPropagation();
       moveWrap.appendChild(moveLabel);
       moveWrap.appendChild(moveSelect);
 
-      menu.appendChild(renameBtn);
+      if (appState.editingChatId === chat.id) {
+        const renameForm = document.createElement('div');
+        renameForm.className = 'rename-row';
+        const input = document.createElement('input');
+        input.className = 'text-input';
+        input.value =
+          appState.editingChatDraft !== ''
+            ? appState.editingChatDraft
+            : chat.name;
+        input.placeholder = 'Chat name';
+        input.oninput = (e) => {
+          e.stopPropagation();
+          appState = { ...appState, editingChatDraft: e.target.value, editingChatId: chat.id };
+          saveState(appState);
+        };
+
+        const actions = document.createElement('div');
+        actions.className = 'rename-actions';
+
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'primary';
+        saveBtn.textContent = 'Save';
+        saveBtn.onclick = (e) => {
+          e.stopPropagation();
+          submitChatRename(chat.id);
+        };
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'ghost';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.onclick = (e) => {
+          e.stopPropagation();
+          cancelChatRename();
+        };
+
+        actions.appendChild(saveBtn);
+        actions.appendChild(cancelBtn);
+        renameForm.appendChild(input);
+        renameForm.appendChild(actions);
+        menu.appendChild(renameForm);
+      } else {
+        menu.appendChild(renameBtn);
+      }
+
       menu.appendChild(deleteBtn);
       menu.appendChild(moveWrap);
 
@@ -223,14 +278,52 @@ function renderMessages() {
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
 
-    const content = document.createElement('div');
-    content.className = 'message-content';
-    content.textContent = msg.content;
-    div.appendChild(content);
+    const isEditing =
+      appState.editingMessageChatId === chat.id &&
+      appState.editingMessageIndex === index;
+
+    if (isEditing) {
+      const editBox = document.createElement('div');
+      editBox.className = 'message-edit';
+
+      const textarea = document.createElement('textarea');
+      textarea.value =
+        appState.editingMessageDraft !== ''
+          ? appState.editingMessageDraft
+          : msg.content;
+      textarea.oninput = (e) => {
+        appState = { ...appState, editingMessageDraft: e.target.value, editingMessageIndex: index };
+        saveState(appState);
+      };
+
+      const actions = document.createElement('div');
+      actions.className = 'message-edit-actions';
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'primary';
+      saveBtn.textContent = 'Save';
+      saveBtn.onclick = submitMessageEdit;
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'ghost';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = cancelMessageEdit;
+
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+      editBox.appendChild(textarea);
+      editBox.appendChild(actions);
+      div.appendChild(editBox);
+    } else {
+      const content = document.createElement('div');
+      content.className = 'message-content';
+      content.textContent = msg.content;
+      div.appendChild(content);
+    }
 
     const isLastUserMessage = index === lastUserIndex;
 
-    if (isLastUserMessage) {
+    if (isLastUserMessage && !isEditing) {
       const actions = document.createElement('div');
       actions.className = 'message-actions';
 
@@ -302,7 +395,27 @@ function removeChat(chatId) {
   if (!confirm('Delete this chat?')) return;
   const remaining = appState.chats.filter((c) => c.id !== chatId);
   if (!remaining.length) {
-    setState(defaultState());
+    const baseFolders = appState.folders.length
+      ? appState.folders
+      : [{ id: 'root', name: 'Unsorted' }];
+    const hasRoot = baseFolders.some((f) => f.id === 'root');
+    const folders = hasRoot ? baseFolders : [{ id: 'root', name: 'Unsorted' }, ...baseFolders];
+    const targetFolderId =
+      folders.find((f) => f.id === appState.selectedFolderId)?.id || 'root';
+    const chat = {
+      id: uuid(),
+      name: 'New chat',
+      folderId: targetFolderId,
+      files: [],
+      messages: [],
+    };
+    openChatMenuId = null;
+    setState({
+      chats: [chat],
+      selectedChatId: chat.id,
+      folders,
+      expandedFolders: { ...appState.expandedFolders, [targetFolderId]: true },
+    });
     toastMessage('Chat deleted. Created a fresh chat.');
     return;
   }
@@ -315,13 +428,32 @@ function removeChat(chatId) {
 
 function renameChat(chatId) {
   const chat = appState.chats.find((c) => c.id === chatId);
-  const name = prompt('New chat name?', chat?.name || '');
-  if (!name) return;
-  const chats = appState.chats.map((chat) =>
-    chat.id === chatId ? { ...chat, name } : chat,
+  if (!chat) return;
+  const draft =
+    appState.editingChatDraft !== '' ? appState.editingChatDraft : chat.name || '';
+  const name = draft.trim();
+  if (!name) {
+    toastMessage('Chat name cannot be empty');
+    return;
+  }
+  const chats = appState.chats.map((entry) =>
+    entry.id === chatId ? { ...entry, name } : entry,
   );
   openChatMenuId = null;
-  setState({ chats });
+  setState({ chats, editingChatId: null, editingChatDraft: '' });
+}
+
+function startChatRename(chat) {
+  setState({ editingChatId: chat.id, editingChatDraft: chat.name || '' });
+}
+
+function submitChatRename(chatId) {
+  renameChat(chatId);
+}
+
+function cancelChatRename() {
+  openChatMenuId = null;
+  setState({ editingChatId: null, editingChatDraft: '' });
 }
 
 function addFolder() {
@@ -482,20 +614,50 @@ function editLastUserMessage() {
   }
 
   const lastUserMessage = chat.messages[lastUserIndex];
-  const edited = prompt('Edit your last message:', lastUserMessage.content || '');
-  if (edited === null) return;
+  setState({
+    editingMessageChatId: chat.id,
+    editingMessageIndex: lastUserIndex,
+    editingMessageDraft: lastUserMessage.content || '',
+  });
+}
 
-  const trimmed = edited.trim();
+function cancelMessageEdit() {
+  setState({
+    editingMessageChatId: null,
+    editingMessageIndex: null,
+    editingMessageDraft: '',
+  });
+}
+
+function submitMessageEdit() {
+  const { editingMessageChatId, editingMessageIndex } = appState;
+  if (editingMessageIndex === null || !editingMessageChatId) return;
+  const chat = appState.chats.find((c) => c.id === editingMessageChatId);
+  if (!chat) return;
+
+  const draft = appState.editingMessageDraft || '';
+  const trimmed = draft.trim();
+
   if (!trimmed) {
     toastMessage('Message cannot be empty');
     return;
   }
 
   const updatedMessages = chat.messages.map((msg, idx) =>
-    idx === lastUserIndex ? { ...msg, content: trimmed } : msg,
+    idx === editingMessageIndex ? { ...msg, content: trimmed } : msg,
   );
 
-  persistChatUpdates({ messages: updatedMessages });
+  const chats = appState.chats.map((c) =>
+    c.id === chat.id ? { ...c, messages: updatedMessages } : c,
+  );
+
+  setState({
+    chats,
+    editingMessageChatId: null,
+    editingMessageIndex: null,
+    editingMessageDraft: '',
+  });
+
   promptInput.value = trimmed;
   toastMessage('Updated last message. Use retry to resend.');
 }
