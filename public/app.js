@@ -13,6 +13,11 @@ const toast = document.getElementById('toast');
 const newFolderButton = document.getElementById('new-folder');
 const toggleSidebarButton = document.getElementById('sidebar-toggle');
 const settingsButton = document.getElementById('settings-button');
+const folderOverlay = document.getElementById('folder-overlay');
+const folderNameInput = document.getElementById('folder-name-input');
+const createFolderButton = document.getElementById('create-folder');
+const cancelFolderButton = document.getElementById('cancel-folder');
+const closeFolderButton = document.getElementById('close-folder');
 const settingsOverlay = document.getElementById('settings-overlay');
 const settingsPersonaInput = document.getElementById('settings-persona');
 const settingsModelInput = document.getElementById('settings-model');
@@ -24,6 +29,7 @@ let openChatMenuId = null;
 const retryDelays = [3000, 5000, 7000];
 let activeAbortController = null;
 let isRequestPending = false;
+let wasFolderModalOpen = false;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -67,6 +73,8 @@ const defaultState = () => {
     editingMessageChatId: null,
     editingMessageIndex: null,
     editingMessageDraft: '',
+    newFolderModalOpen: false,
+    newFolderDraft: '',
     selectedChatId: chatId,
     selectedFolderId: defaultFolder.id,
     sidebarHidden: false,
@@ -96,6 +104,8 @@ let appState = storedState
       editingMessageChatId: null,
       editingMessageIndex: null,
       editingMessageDraft: '',
+      newFolderModalOpen: false,
+      newFolderDraft: '',
       settings: { ...baseDefaults.settings, ...fallbackSettings },
     }
   : baseDefaults;
@@ -483,6 +493,13 @@ function render() {
   toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
   settingsPersonaInput.value = appState.settings.persona || '';
   settingsModelInput.value = appState.settings.model || 'openrouter/auto';
+  const shouldShowFolderModal = appState.newFolderModalOpen;
+  folderOverlay.classList.toggle('show', shouldShowFolderModal);
+  folderNameInput.value = appState.newFolderDraft || '';
+  if (shouldShowFolderModal && !wasFolderModalOpen) {
+    folderNameInput.focus();
+  }
+  wasFolderModalOpen = shouldShowFolderModal;
 }
 
 function addChat(folderId) {
@@ -592,14 +609,27 @@ function cancelFolderRename() {
   setState({ editingFolderId: null, editingFolderDraft: '' });
 }
 
+function openNewFolderModal() {
+  setState({ newFolderModalOpen: true, newFolderDraft: '' });
+}
+
+function closeNewFolderModal() {
+  setState({ newFolderModalOpen: false, newFolderDraft: '' });
+}
+
 function addFolder() {
-  const name = prompt('Folder name');
-  if (!name) return;
+  const name = (appState.newFolderDraft || '').trim();
+  if (!name) {
+    toastMessage('Folder name cannot be empty');
+    return;
+  }
   const folder = { id: uuid(), name };
   setState({
     folders: [...appState.folders, folder],
     selectedFolderId: folder.id,
     expandedFolders: { ...appState.expandedFolders, [folder.id]: true },
+    newFolderModalOpen: false,
+    newFolderDraft: '',
   });
 }
 
@@ -927,7 +957,7 @@ sendButton.addEventListener('click', handleSend);
 cancelButton.addEventListener('click', cancelActiveRequest);
 newChatButton.addEventListener('click', () => addChat(appState.selectedFolderId || 'root'));
 fileInput.addEventListener('change', handleFileUpload);
-newFolderButton.addEventListener('click', addFolder);
+newFolderButton.addEventListener('click', openNewFolderModal);
 toggleSidebarButton.addEventListener('click', () => setState({ sidebarHidden: !appState.sidebarHidden }));
 settingsButton.addEventListener('click', () => {
   settingsOverlay.classList.add('show');
@@ -936,6 +966,25 @@ settingsButton.addEventListener('click', () => {
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) {
     settingsOverlay.classList.remove('show');
+  }
+});
+folderOverlay.addEventListener('click', (e) => {
+  if (e.target === folderOverlay) {
+    closeNewFolderModal();
+  }
+});
+createFolderButton.addEventListener('click', addFolder);
+cancelFolderButton.addEventListener('click', closeNewFolderModal);
+closeFolderButton.addEventListener('click', closeNewFolderModal);
+folderNameInput.addEventListener('input', (e) => {
+  setState({ newFolderDraft: e.target.value });
+});
+folderNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addFolder();
+  } else if (e.key === 'Escape') {
+    closeNewFolderModal();
   }
 });
 closeSettingsButtons.forEach((btn) =>
