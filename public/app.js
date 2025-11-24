@@ -379,6 +379,10 @@ function renderMessages() {
       appState.editingMessageIndex === index;
 
     if (isEditing) {
+      div.classList.add('editing');
+    }
+
+    if (isEditing) {
       const editBox = document.createElement('div');
       editBox.className = 'message-edit';
 
@@ -416,14 +420,16 @@ function renderMessages() {
       content.textContent = msg.content;
       div.appendChild(content);
 
-      if (msg.role === 'assistant') {
+      const isStreamingAssistant = msg.role === 'assistant' && msg.streaming;
+
+      if (msg.role === 'assistant' && !isStreamingAssistant) {
         const copyActions = document.createElement('div');
         copyActions.className = 'message-actions assistant-actions';
 
         const copyBtn = document.createElement('button');
         copyBtn.className = 'ghost icon copy-button';
         copyBtn.title = 'Copy message';
-        copyBtn.textContent = '📋';
+        copyBtn.textContent = '⧉';
         copyBtn.onclick = async () => {
           try {
             await navigator.clipboard.writeText(msg.content || '');
@@ -712,7 +718,7 @@ async function sendChatCompletion(messageHistory) {
   if (!chat || !messageHistory.length) return;
 
   let assistantContent = '';
-  const pendingMessage = { role: 'assistant', content: assistantContent };
+  const pendingMessage = { role: 'assistant', content: assistantContent, streaming: true };
   persistChatUpdates({ messages: [...messageHistory, pendingMessage] });
   const controller = new AbortController();
   activeAbortController = controller;
@@ -727,12 +733,15 @@ async function sendChatCompletion(messageHistory) {
         if (!chunk) return;
         assistantContent += chunk;
         persistChatUpdates({
-          messages: [...messageHistory, { role: 'assistant', content: assistantContent }],
+          messages: [
+            ...messageHistory,
+            { role: 'assistant', content: assistantContent, streaming: true },
+          ],
         });
       },
     });
     const finalContent = data?.content || assistantContent || '(no content returned)';
-    const assistantMessage = { role: 'assistant', content: finalContent };
+    const assistantMessage = { role: 'assistant', content: finalContent, streaming: false };
     persistChatUpdates({ messages: [...messageHistory, assistantMessage] });
   } catch (err) {
     if (err.name === 'AbortError') {
