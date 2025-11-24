@@ -132,13 +132,15 @@ function renderFolders() {
 
     const toggle = document.createElement('button');
     toggle.className = 'ghost icon folder-toggle';
-    toggle.textContent = appState.expandedFolders[folder.id] === false ? '▸' : '▾';
+    const isExpanded = appState.expandedFolders[folder.id] !== false;
+    toggle.textContent = isExpanded ? '▾' : '▸';
     toggle.onclick = (e) => {
       e.stopPropagation();
+      const currentlyExpanded = appState.expandedFolders[folder.id] !== false;
       setState({
         expandedFolders: {
           ...appState.expandedFolders,
-          [folder.id]: !(appState.expandedFolders[folder.id] === false),
+          [folder.id]: !currentlyExpanded,
         },
       });
     };
@@ -403,6 +405,28 @@ function renderMessages() {
       content.className = 'message-content';
       content.textContent = msg.content;
       div.appendChild(content);
+
+      if (msg.role === 'assistant') {
+        const copyActions = document.createElement('div');
+        copyActions.className = 'message-actions assistant-actions';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'ghost icon copy-button';
+        copyBtn.title = 'Copy message';
+        copyBtn.textContent = '📋';
+        copyBtn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(msg.content || '');
+            toastMessage('Copied to clipboard');
+          } catch (err) {
+            console.error('Clipboard copy failed', err);
+            toastMessage('Unable to copy message');
+          }
+        };
+
+        copyActions.appendChild(copyBtn);
+        div.appendChild(copyActions);
+      }
     }
 
     const isLastUserMessage = index === lastUserIndex;
@@ -657,15 +681,28 @@ async function sendChatCompletion(messageHistory) {
   const chat = getSelectedChat();
   if (!chat || !messageHistory.length) return;
 
-  const pendingMessage = { role: 'assistant', content: 'Thinking…' };
+  let assistantContent = '';
+  const pendingMessage = { role: 'assistant', content: assistantContent };
   persistChatUpdates({ messages: [...messageHistory, pendingMessage] });
   const controller = new AbortController();
   activeAbortController = controller;
   setRequestPending(true);
 
   try {
-    const data = await performChatRequest({ chat, messageHistory, signal: controller.signal });
-    const assistantMessage = { role: 'assistant', content: data.content || '(no content returned)' };
+    const data = await performChatRequest({
+      chat,
+      messageHistory,
+      signal: controller.signal,
+      onChunk: (chunk) => {
+        if (!chunk) return;
+        assistantContent += chunk;
+        persistChatUpdates({
+          messages: [...messageHistory, { role: 'assistant', content: assistantContent }],
+        });
+      },
+    });
+    const finalContent = data?.content || assistantContent || '(no content returned)';
+    const assistantMessage = { role: 'assistant', content: finalContent };
     persistChatUpdates({ messages: [...messageHistory, assistantMessage] });
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -683,7 +720,54 @@ async function sendChatCompletion(messageHistory) {
   }
 }
 
-async function performChatRequest({ chat, messageHistory, signal }) {
+async function readEventStream(response, onChunk) {
+  if (!response.body) {
+    throw new Error('Streaming not supported in this browser');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let doneReading = false;
+
+  while (!doneReading) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop();
+
+    for (const event of events) {
+      const lines = event
+        .split('\n')
+        .map((line) => line.replace(/^data:\s?/, '').trim())
+        .filter(Boolean);
+      for (const line of lines) {
+        if (line === '[DONE]') {
+          doneReading = true;
+          break;
+        }
+        try {
+          const parsed = JSON.parse(line);
+          const delta =
+            parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.message?.content || '';
+          if (delta) {
+            fullText += delta;
+            if (onChunk) onChunk(delta, fullText);
+          }
+        } catch (err) {
+          console.error('Failed to parse stream chunk', err, line);
+        }
+      }
+      if (doneReading) break;
+    }
+  }
+
+  return fullText;
+}
+
+async function performChatRequest({ chat, messageHistory, signal, onChunk }) {
   for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -694,8 +778,17 @@ async function performChatRequest({ chat, messageHistory, signal }) {
         model: appState.settings.model,
         persona: appState.settings.persona,
         files: chat.files,
+        stream: true,
       }),
     });
+
+    const contentType = response.headers.get('content-type') || '';
+    const isStream = contentType.includes('text/event-stream');
+
+    if (response.ok && isStream) {
+      const content = await readEventStream(response, onChunk);
+      return { content };
+    }
 
     let data = null;
     try {
