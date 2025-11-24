@@ -119,6 +119,24 @@
         </div>
       </div>
     </div>
+    <div id="confirm-overlay" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <p id="confirm-context" class="muted">Confirm</p>
+            <h3 id="confirm-title">Are you sure?</h3>
+          </div>
+          <button id="close-confirm" class="ghost icon" aria-label="Close confirmation dialog">✕</button>
+        </div>
+        <div class="modal-body">
+          <p id="confirm-message" class="muted confirm-message"></p>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-confirm" class="ghost">Cancel</button>
+          <button id="confirm-action" class="primary danger">Confirm</button>
+        </div>
+      </div>
+    </div>
     <script src="/app.js" type="module"></script>
   </body>
 </html>
