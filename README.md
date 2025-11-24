@@ -3,11 +3,13 @@
 A lightweight, dependency-free web app for chatting with OpenRouter models. It supports multi-chat workflows, persona prompts, folders, and adding local text files to the chat context.
 
 ## Features
-- Multiple chats with create, rename, and delete controls
-- Organize chats into folders
-- Per-chat persona/system prompt
-- Attach text files (txt, md, csv, json) to include their content in the context
-- Choose an OpenRouter model per chat
+- Multi-chat workspace with folder organization, rename, move, and delete controls
+- Workspace-level model + persona settings that apply to every chat
+- Context files per chat (txt, md, csv, json) included with each request
+- Streaming responses with cancel, retry last response, and edit-last-message flows
+- Copy assistant replies with one click
+- Sidebar hide/show toggle for compact layouts
+- Local persistence via `localStorage` so chats and folders survive refreshes
 - Keyboard shortcut: <kbd>Ctrl/Cmd + Enter</kbd> to send
 
 ## Setup
@@ -29,7 +31,9 @@ node server.js
 ## How it works
 - The Node server (`server.js`) serves the static front-end from `public/` and proxies chat requests to OpenRouter using your `OPENROUTER_API_KEY`.
 - The front-end stores chats, folders, personas, and file attachments in `localStorage` so your workspace persists across refreshes.
-- When you send a message, the persona text and file contents are merged into the system prompt that is sent with your conversation history.
+- Use the settings dialog to pick a model and set a persona; both are applied to every chat.
+- When you send a message, any attached files for that chat are merged into the system prompt along with the persona text.
+- Responses stream in real time; you can cancel an in-flight request, retry after editing your last user message, or copy an assistant reply.
 
 ## Security
 - Your API key stays on the server; the browser never sees it.
