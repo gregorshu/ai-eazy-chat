@@ -96,13 +96,32 @@
               <span class="label">Model</span>
               <button id="refresh-models" class="ghost" type="button">Refresh list</button>
             </div>
-            <input
-              id="settings-model"
-              class="text-input"
-              list="model-options"
-              placeholder="Model (type or pick a preset)"
-            />
-            <datalist id="model-options"></datalist>
+            <div class="model-field">
+              <div class="model-input-row">
+                <input
+                  id="settings-model"
+                  class="text-input"
+                  type="text"
+                  placeholder="Select a model"
+                  autocomplete="off"
+                />
+                <button id="model-toggle" class="ghost icon" type="button" aria-label="Toggle model list">
+                  ▾
+                </button>
+              </div>
+              <div id="model-dropdown" class="model-dropdown" role="listbox" aria-label="Model list">
+                <div class="model-search-row">
+                  <input
+                    id="model-search"
+                    class="text-input"
+                    type="text"
+                    placeholder="Search models"
+                    autocomplete="off"
+                  />
+                </div>
+                <ul id="model-list" class="model-list"></ul>
+              </div>
+            </div>
           </label>
           <label class="stack" for="settings-persona">
             <span class="label">Persona / System prompt</span>

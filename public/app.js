@@ -21,7 +21,10 @@ const closeFolderButton = document.getElementById('close-folder');
 const settingsOverlay = document.getElementById('settings-overlay');
 const settingsPersonaInput = document.getElementById('settings-persona');
 const settingsModelInput = document.getElementById('settings-model');
-const modelOptionsList = document.getElementById('model-options');
+const modelDropdown = document.getElementById('model-dropdown');
+const modelToggleButton = document.getElementById('model-toggle');
+const modelSearchInput = document.getElementById('model-search');
+const modelList = document.getElementById('model-list');
 const refreshModelsButton = document.getElementById('refresh-models');
 const closeSettingsButtons = [
   document.getElementById('close-settings'),
@@ -98,6 +101,8 @@ const defaultState = () => {
     settings: { persona: '', model: 'openrouter/auto' },
     modelOptions: defaultModelOptions,
     modelOptionsLoading: false,
+    modelDropdownOpen: false,
+    modelSearch: '',
   };
 };
 
@@ -126,9 +131,19 @@ let appState = storedState
       newFolderDraft: '',
       modelOptions: storedState.modelOptions || defaultModelOptions,
       modelOptionsLoading: false,
+      modelDropdownOpen: storedState.modelDropdownOpen || false,
+      modelSearch: storedState.modelSearch || '',
       settings: { ...baseDefaults.settings, ...fallbackSettings },
     }
   : baseDefaults;
+
+if (!appState.settings.model) {
+  appState = {
+    ...appState,
+    settings: { ...appState.settings, model: 'openrouter/auto' },
+  };
+  saveState(appState);
+}
 
 function setState(update) {
   appState = { ...appState, ...update };
@@ -551,18 +566,62 @@ function renderFiles() {
   });
 }
 
-function renderModelOptions() {
-  const fragment = document.createDocumentFragment();
-  const options = appState.modelOptions?.length ? appState.modelOptions : defaultModelOptions;
+function getModelOptions() {
+  return appState.modelOptions?.length ? appState.modelOptions : defaultModelOptions;
+}
 
-  options.forEach((value) => {
-    const option = document.createElement('option');
-    option.value = value;
-    fragment.appendChild(option);
+function getFilteredModels() {
+  const searchTerm = (appState.modelSearch || '').toLowerCase();
+  const options = getModelOptions();
+  if (!searchTerm) return options;
+  return options.filter((option) => option.toLowerCase().includes(searchTerm));
+}
+
+function selectModel(model) {
+  const value = model || 'openrouter/auto';
+  setState({
+    settings: { ...appState.settings, model: value },
+    modelDropdownOpen: false,
+    modelSearch: '',
   });
+}
 
-  modelOptionsList.innerHTML = '';
-  modelOptionsList.appendChild(fragment);
+function renderModelOptions() {
+  const options = getFilteredModels();
+
+  if (modelList) {
+    modelList.innerHTML = '';
+
+    if (!options.length) {
+      const empty = document.createElement('li');
+      empty.className = 'model-empty';
+      empty.textContent = 'No models match your search.';
+      modelList.appendChild(empty);
+    } else {
+      options.forEach((value) => {
+        const li = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'model-option';
+        button.textContent = value;
+        button.onclick = () => selectModel(value);
+        li.appendChild(button);
+        modelList.appendChild(li);
+      });
+    }
+  }
+
+  if (modelDropdown) {
+    modelDropdown.classList.toggle('show', appState.modelDropdownOpen);
+  }
+
+  if (modelToggleButton) {
+    modelToggleButton.setAttribute('aria-expanded', appState.modelDropdownOpen ? 'true' : 'false');
+  }
+
+  if (modelSearchInput) {
+    modelSearchInput.value = appState.modelSearch || '';
+  }
 
   if (refreshModelsButton) {
     refreshModelsButton.disabled = appState.modelOptionsLoading;
@@ -1146,15 +1205,45 @@ settingsPersonaInput.addEventListener('input', (e) => {
   setState({ settings: { ...appState.settings, persona: e.target.value } });
 });
 settingsModelInput.addEventListener('input', (e) => {
-  setState({ settings: { ...appState.settings, model: e.target.value } });
+  const value = e.target.value;
+  setState({
+    settings: { ...appState.settings, model: value || 'openrouter/auto' },
+    modelSearch: value,
+    modelDropdownOpen: true,
+  });
 });
 
+settingsModelInput.addEventListener('focus', () => {
+  if (!appState.modelDropdownOpen) {
+    setState({ modelDropdownOpen: true });
+  }
+});
+
+if (modelSearchInput) {
+  modelSearchInput.addEventListener('input', (e) => {
+    setState({ modelSearch: e.target.value, modelDropdownOpen: true });
+  });
+}
+
+if (modelToggleButton) {
+  modelToggleButton.addEventListener('click', () => {
+    setState({ modelDropdownOpen: !appState.modelDropdownOpen });
+  });
+}
+
 document.addEventListener('click', (event) => {
-  if (!openChatMenuId) return;
   const target = event.target;
-  if (target.closest('.chat-menu') || target.closest('.chat-menu-trigger')) return;
-  openChatMenuId = null;
-  renderFolders();
+
+  if (openChatMenuId) {
+    if (target.closest('.chat-menu') || target.closest('.chat-menu-trigger')) return;
+    openChatMenuId = null;
+    renderFolders();
+  }
+
+  const clickedModelField = target.closest('.model-field');
+  if (!clickedModelField && appState.modelDropdownOpen) {
+    setState({ modelDropdownOpen: false, modelSearch: '' });
+  }
 });
 
 render();
