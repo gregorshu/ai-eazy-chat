@@ -644,8 +644,84 @@ textarea::placeholder {
 }
 
 .model-field {
-  min-width: 220px;
+  min-width: 260px;
   flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-input-row {
+  display: grid;
+  grid-template-columns: 1fr 44px;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-input-row .text-input {
+  width: 100%;
+}
+
+.model-input-row button {
+  height: 100%;
+}
+
+.model-dropdown {
+  display: none;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 10px;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+}
+
+.model-dropdown.show {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.model-search-row .text-input {
+  width: 100%;
+}
+
+.model-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-option {
+  width: 100%;
+  text-align: left;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.model-option:hover,
+.model-option:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.model-empty {
+  color: var(--muted);
+  padding: 10px 6px;
 }
 
 .toast {
@@ -720,6 +796,19 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.label-row button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
 }
 
 .label {
