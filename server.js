@@ -70,14 +70,15 @@ function buildSystemPrompt(persona, files = []) {
   return `${personaText}\nThe following files are in context:\n${fileSummaries}`;
 }
 
-function fetchOpenRouterModels() {
+function fetchOpenRouterModels(apiKey) {
+  const key = apiKey || API_KEY;
   return new Promise((resolve, reject) => {
     const options = {
       method: 'GET',
       hostname: 'openrouter.ai',
       path: '/api/v1/models',
       headers: {
-        Authorization: `Bearer ${API_KEY}`,
+        Authorization: `Bearer ${key}`,
         'HTTP-Referer': 'http://localhost',
         'X-Title': 'ai-eazy-chat',
       },
@@ -111,13 +112,25 @@ function fetchOpenRouterModels() {
 }
 
 async function handleModels(req, res) {
-  if (!API_KEY) {
-    sendJson(res, 500, { error: 'OPENROUTER_API_KEY is not set on the server.' });
+  let payload = {};
+  if (req.method === 'POST') {
+    try {
+      const body = await bufferBody(req);
+      payload = JSON.parse(body || '{}');
+    } catch (err) {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+  }
+
+  const apiKey = payload.apiKey || API_KEY;
+  if (!apiKey) {
+    sendJson(res, 500, { error: 'OpenRouter API key is not set. Please set it in settings or as OPENROUTER_API_KEY environment variable.' });
     return;
   }
 
   try {
-    const models = await fetchOpenRouterModels();
+    const models = await fetchOpenRouterModels(apiKey);
     sendJson(res, 200, { models });
   } catch (err) {
     console.error('Failed to fetch OpenRouter models', err);
@@ -126,17 +139,18 @@ async function handleModels(req, res) {
 }
 
 async function handleChat(req, res) {
-  if (!API_KEY) {
-    sendJson(res, 500, { error: 'OPENROUTER_API_KEY is not set on the server.' });
-    return;
-  }
-
   let payload;
   try {
     const body = await bufferBody(req);
     payload = JSON.parse(body || '{}');
   } catch (err) {
     sendJson(res, 400, { error: 'Invalid JSON body' });
+    return;
+  }
+
+  const apiKey = payload.apiKey || API_KEY;
+  if (!apiKey) {
+    sendJson(res, 500, { error: 'OpenRouter API key is not set. Please set it in settings or as OPENROUTER_API_KEY environment variable.' });
     return;
   }
 
@@ -160,7 +174,7 @@ async function handleChat(req, res) {
     headers: {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(requestBody),
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       'HTTP-Referer': 'http://localhost',
       'X-Title': 'ai-eazy-chat',
     },
@@ -236,7 +250,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && url.pathname === '/api/models') {
+  if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/api/models') {
     handleModels(req, res);
     return;
   }
