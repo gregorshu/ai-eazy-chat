@@ -46,7 +46,10 @@
         </section>
         <footer class="composer">
           <div class="composer-box">
-            <textarea id="prompt" rows="3" placeholder="Write your message..."></textarea>
+            <div class="textarea-wrapper">
+              <textarea id="prompt" rows="3" placeholder="Write your message..."></textarea>
+              <button id="expand-textarea" class="expand-icon" aria-label="Expand message field" title="Expand message field">⤢</button>
+            </div>
             <button id="send" class="primary">Send</button>
             <button id="cancel" class="ghost" aria-label="Cancel request" disabled>Cancel</button>
           </div>
@@ -91,46 +94,99 @@
           <button id="close-settings" class="ghost icon" aria-label="Close settings">✕</button>
         </div>
         <div class="modal-body">
-          <label class="stack" for="settings-model">
-            <div class="label-row">
-              <span class="label">Model</span>
-              <button id="refresh-models" class="ghost" type="button">Refresh list</button>
-            </div>
-            <div class="model-field">
-              <div class="model-input-row">
-                <input
-                  id="settings-model"
-                  class="text-input"
-                  type="text"
-                  placeholder="Select a model"
-                  autocomplete="off"
-                />
-                <button id="model-toggle" class="ghost icon" type="button" aria-label="Toggle model list">
-                  ▾
-                </button>
+          <div class="tabs">
+            <button id="tab-model" class="tab-button active" data-tab="model">Model & API Key</button>
+            <button id="tab-persona" class="tab-button" data-tab="persona">Persona</button>
+          </div>
+          <div id="tab-panel-model" class="tab-panel active">
+            <label class="stack" for="settings-model">
+              <div class="label-row">
+                <span class="label">Model</span>
+                <button id="refresh-models" class="ghost" type="button">Refresh list</button>
               </div>
-              <div id="model-dropdown" class="model-dropdown" role="listbox" aria-label="Model list">
-                <div class="model-search-row">
+              <div class="model-field">
+                <div class="model-input-row">
                   <input
-                    id="model-search"
+                    id="settings-model"
                     class="text-input"
                     type="text"
-                    placeholder="Search models"
+                    placeholder="Select a model"
                     autocomplete="off"
                   />
+                  <button id="model-toggle" class="ghost icon" type="button" aria-label="Toggle model list">
+                    ▾
+                  </button>
                 </div>
-                <ul id="model-list" class="model-list"></ul>
+                <div id="model-dropdown" class="model-dropdown" role="listbox" aria-label="Model list">
+                  <div class="model-search-row">
+                    <input
+                      id="model-search"
+                      class="text-input"
+                      type="text"
+                      placeholder="Search models"
+                      autocomplete="off"
+                    />
+                  </div>
+                  <ul id="model-list" class="model-list"></ul>
+                </div>
+              </div>
+            </label>
+            <label class="stack" for="settings-api-key">
+              <span class="label">OpenRouter API Key</span>
+              <input
+                id="settings-api-key"
+                class="text-input"
+                type="password"
+                placeholder="Leave empty to use environment variable"
+                autocomplete="off"
+              />
+              <p class="muted" style="font-size: 0.875rem; margin-top: 4px;">
+                If set, this will override the OPENROUTER_API_KEY environment variable.
+              </p>
+            </label>
+          </div>
+          <div id="tab-panel-persona" class="tab-panel">
+            <div class="personas-header">
+              <h4 style="margin: 0; font-size: 14px; color: var(--text);">Personas</h4>
+              <button id="add-persona-button" class="primary" type="button">+ Add Persona</button>
+            </div>
+            <ul id="personas-list" class="personas-list"></ul>
+          </div>
+          <div id="persona-modal" class="modal-overlay">
+            <div class="modal">
+              <div class="modal-header">
+                <div>
+                  <p class="muted">Personas</p>
+                  <h3 id="persona-modal-title">New Persona</h3>
+                </div>
+                <button id="close-persona-modal" class="ghost icon" aria-label="Close persona dialog">✕</button>
+              </div>
+              <div class="modal-body">
+                <label class="stack" for="persona-name-input">
+                  <span class="label">Name</span>
+                  <input
+                    id="persona-name-input"
+                    class="text-input"
+                    type="text"
+                    placeholder="e.g. Playful Pirate"
+                    autocomplete="off"
+                  />
+                </label>
+                <label class="stack" for="persona-content-input">
+                  <span class="label">System Prompt</span>
+                  <textarea
+                    id="persona-content-input"
+                    rows="4"
+                    placeholder="e.g. You are a playful pirate with a love for TypeScript."
+                  ></textarea>
+                </label>
+              </div>
+              <div class="modal-footer">
+                <button id="cancel-persona" class="ghost">Cancel</button>
+                <button id="save-persona" class="primary">Save</button>
               </div>
             </div>
-          </label>
-          <label class="stack" for="settings-persona">
-            <span class="label">Persona / System prompt</span>
-            <textarea
-              id="settings-persona"
-              rows="4"
-              placeholder="e.g. You are a playful pirate with a love for TypeScript."
-            ></textarea>
-          </label>
+          </div>
         </div>
         <div class="modal-footer">
           <button id="close-settings-cta" class="primary">Done</button>

@@ -6,6 +6,8 @@ const folderList = document.getElementById('folder-list');
 const promptInput = document.getElementById('prompt');
 const sendButton = document.getElementById('send');
 const cancelButton = document.getElementById('cancel');
+const expandTextareaButton = document.getElementById('expand-textarea');
+const textareaWrapper = document.querySelector('.textarea-wrapper');
 const newChatButton = document.getElementById('new-chat');
 const fileInput = document.getElementById('file-input');
 const fileList = document.getElementById('file-list');
@@ -19,8 +21,21 @@ const createFolderButton = document.getElementById('create-folder');
 const cancelFolderButton = document.getElementById('cancel-folder');
 const closeFolderButton = document.getElementById('close-folder');
 const settingsOverlay = document.getElementById('settings-overlay');
-const settingsPersonaInput = document.getElementById('settings-persona');
 const settingsModelInput = document.getElementById('settings-model');
+const settingsApiKeyInput = document.getElementById('settings-api-key');
+const tabModelButton = document.getElementById('tab-model');
+const tabPersonaButton = document.getElementById('tab-persona');
+const tabPanelModel = document.getElementById('tab-panel-model');
+const tabPanelPersona = document.getElementById('tab-panel-persona');
+const personasList = document.getElementById('personas-list');
+const addPersonaButton = document.getElementById('add-persona-button');
+const personaModal = document.getElementById('persona-modal');
+const personaModalTitle = document.getElementById('persona-modal-title');
+const personaNameInput = document.getElementById('persona-name-input');
+const personaContentInput = document.getElementById('persona-content-input');
+const savePersonaButton = document.getElementById('save-persona');
+const cancelPersonaButton = document.getElementById('cancel-persona');
+const closePersonaModalButton = document.getElementById('close-persona-modal');
 const modelDropdown = document.getElementById('model-dropdown');
 const modelToggleButton = document.getElementById('model-toggle');
 const modelSearchInput = document.getElementById('model-search');
@@ -74,6 +89,13 @@ const defaultModelOptions = [
 const defaultState = () => {
   const defaultFolder = { id: 'root', name: 'Unsorted' };
   const chatId = uuid();
+  const defaultPersonaId = uuid();
+  const defaultPersona = {
+    id: defaultPersonaId,
+    name: 'Default Assistant',
+    content: 'You are a helpful AI-assistant.',
+    isDefault: true,
+  };
   return {
     folders: [defaultFolder],
     chats: [
@@ -98,20 +120,59 @@ const defaultState = () => {
     selectedFolderId: defaultFolder.id,
     sidebarHidden: false,
     expandedFolders: { root: true },
-    settings: { persona: '', model: 'openrouter/auto' },
+    textareaExpanded: false,
+    personas: [defaultPersona],
+    editingPersonaId: null,
+    editingPersonaDraft: { name: '', content: '' },
+    newPersonaModalOpen: false,
+    newPersonaDraft: { name: '', content: '' },
+    settings: { activePersonaId: defaultPersonaId, model: 'openrouter/auto', apiKey: '' },
     modelOptions: defaultModelOptions,
     modelOptionsLoading: false,
     modelDropdownOpen: false,
     modelSearch: '',
+    activeSettingsTab: 'model',
   };
 };
 
 const storedState = loadState();
 const baseDefaults = defaultState();
+
+// Migrate old persona format to new personas array
+let personas = baseDefaults.personas;
+let activePersonaId = baseDefaults.settings.activePersonaId;
+
+if (storedState) {
+  // If personas array exists, use it
+  if (storedState.personas && Array.isArray(storedState.personas) && storedState.personas.length > 0) {
+    personas = storedState.personas;
+    // Ensure default persona has isDefault flag
+    personas = personas.map((p, index) => {
+      if (index === 0 && !p.isDefault && p.name === 'Default Assistant' && p.content === 'You are a helpful AI-assistant.') {
+        return { ...p, isDefault: true };
+      }
+      return p;
+    });
+    activePersonaId = storedState.settings?.activePersonaId || personas[0].id;
+  } else if (storedState.settings?.persona) {
+    // Migrate old persona string to new format
+    const oldPersonaId = uuid();
+    personas = [
+      {
+        id: oldPersonaId,
+        name: 'Custom Persona',
+        content: storedState.settings.persona,
+      },
+    ];
+    activePersonaId = oldPersonaId;
+  }
+}
+
 const fallbackSettings =
   storedState?.settings || {
-    persona: storedState?.chats?.[0]?.persona || '',
+    activePersonaId: activePersonaId,
     model: storedState?.chats?.[0]?.model || 'openrouter/auto',
+    apiKey: '',
   };
 
 let appState = storedState
@@ -120,6 +181,7 @@ let appState = storedState
       ...storedState,
       sidebarHidden: storedState.sidebarHidden ?? false,
       expandedFolders: { root: true, ...(storedState.expandedFolders || {}) },
+      textareaExpanded: storedState.textareaExpanded || false,
       editingChatId: null,
       editingChatDraft: '',
       editingFolderId: null,
@@ -129,11 +191,17 @@ let appState = storedState
       editingMessageDraft: '',
       newFolderModalOpen: false,
       newFolderDraft: '',
+      personas: personas,
+      editingPersonaId: null,
+      editingPersonaDraft: { name: '', content: '' },
+      newPersonaModalOpen: false,
+      newPersonaDraft: { name: '', content: '' },
       modelOptions: storedState.modelOptions || defaultModelOptions,
       modelOptionsLoading: false,
       modelDropdownOpen: storedState.modelDropdownOpen || false,
       modelSearch: storedState.modelSearch || '',
-      settings: { ...baseDefaults.settings, ...fallbackSettings },
+      activeSettingsTab: storedState.activeSettingsTab || 'model',
+      settings: { ...baseDefaults.settings, ...fallbackSettings, activePersonaId: activePersonaId },
     }
   : baseDefaults;
 
@@ -145,6 +213,12 @@ if (!appState.settings.model) {
   saveState(appState);
 }
 
+// Ensure activePersonaId exists in personas array
+if (appState.personas.length > 0 && !appState.personas.find(p => p.id === appState.settings.activePersonaId)) {
+  appState.settings.activePersonaId = appState.personas[0].id;
+  saveState(appState);
+}
+
 function setState(update) {
   appState = { ...appState, ...update };
   saveState(appState);
@@ -153,6 +227,11 @@ function setState(update) {
 
 function getSelectedChat() {
   return appState.chats.find((c) => c.id === appState.selectedChatId) || appState.chats[0];
+}
+
+function getActivePersona() {
+  const activePersona = appState.personas.find((p) => p.id === appState.settings.activePersonaId);
+  return activePersona ? activePersona.content : '';
 }
 
 function toastMessage(message, timeout = 2200) {
@@ -566,6 +645,68 @@ function renderFiles() {
   });
 }
 
+function renderPersonas() {
+  if (!personasList) return;
+  personasList.innerHTML = '';
+  
+  appState.personas.forEach((persona) => {
+    const li = document.createElement('li');
+    li.className = 'persona-item';
+    const isActive = persona.id === appState.settings.activePersonaId;
+    if (isActive) {
+      li.classList.add('active');
+    }
+
+    const header = document.createElement('div');
+    header.className = 'persona-header';
+
+    const info = document.createElement('div');
+    info.className = 'persona-info';
+
+    const name = document.createElement('div');
+    name.className = 'persona-name';
+    name.textContent = persona.name;
+
+    const content = document.createElement('div');
+    content.className = 'persona-content';
+    content.textContent = persona.content;
+
+    info.appendChild(name);
+    info.appendChild(content);
+
+    const actions = document.createElement('div');
+    actions.className = 'persona-actions';
+
+    if (!isActive) {
+      const activateBtn = document.createElement('button');
+      activateBtn.className = 'ghost';
+      activateBtn.textContent = 'Activate';
+      activateBtn.onclick = () => activatePersona(persona.id);
+      actions.appendChild(activateBtn);
+    }
+
+    // Don't show edit/delete buttons for default persona
+    if (!persona.isDefault) {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'ghost';
+      editBtn.textContent = 'Edit';
+      editBtn.onclick = () => startPersonaEdit(persona);
+      actions.appendChild(editBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'ghost danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.onclick = () => removePersona(persona.id);
+      actions.appendChild(deleteBtn);
+    }
+
+    header.appendChild(info);
+    header.appendChild(actions);
+    li.appendChild(header);
+    personasList.appendChild(li);
+  });
+}
+
 function getModelOptions() {
   return appState.modelOptions?.length ? appState.modelOptions : defaultModelOptions;
 }
@@ -636,10 +777,39 @@ function render() {
   renderMessages();
   renderFiles();
   renderModelOptions();
+  renderPersonas();
   toggleSidebarButton.textContent = appState.sidebarHidden ? '⟩' : '⟨';
   toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
-  settingsPersonaInput.value = appState.settings.persona || '';
+  // Persona tab is now managed separately, no need to set input value here
   settingsModelInput.value = appState.settings.model || 'openrouter/auto';
+  settingsApiKeyInput.value = appState.settings.apiKey || '';
+  
+  // Update tabs
+  const activeTab = appState.activeSettingsTab || 'model';
+  if (tabModelButton) {
+    tabModelButton.classList.toggle('active', activeTab === 'model');
+  }
+  if (tabPersonaButton) {
+    tabPersonaButton.classList.toggle('active', activeTab === 'persona');
+  }
+  if (tabPanelModel) {
+    tabPanelModel.classList.toggle('active', activeTab === 'model');
+  }
+  if (tabPanelPersona) {
+    tabPanelPersona.classList.toggle('active', activeTab === 'persona');
+  }
+  
+  // Update textarea expand state
+  if (textareaWrapper) {
+    textareaWrapper.classList.toggle('expanded', appState.textareaExpanded);
+  }
+  if (expandTextareaButton) {
+    expandTextareaButton.classList.toggle('expanded', appState.textareaExpanded);
+    expandTextareaButton.textContent = appState.textareaExpanded ? '⤡' : '⤢';
+    expandTextareaButton.setAttribute('title', appState.textareaExpanded ? 'Collapse message field' : 'Expand message field');
+    expandTextareaButton.setAttribute('aria-label', appState.textareaExpanded ? 'Collapse message field' : 'Expand message field');
+  }
+  
   const shouldShowFolderModal = appState.newFolderModalOpen;
   folderOverlay.classList.toggle('show', shouldShowFolderModal);
   folderNameInput.value = appState.newFolderDraft || '';
@@ -647,6 +817,11 @@ function render() {
     folderNameInput.focus();
   }
   wasFolderModalOpen = shouldShowFolderModal;
+
+  // Update persona modal visibility
+  if (personaModal) {
+    personaModal.classList.toggle('show', appState.newPersonaModalOpen);
+  }
 }
 
 function addChat(folderId) {
@@ -985,9 +1160,10 @@ async function performChatRequest({ chat, messageHistory, signal, onChunk }) {
       body: JSON.stringify({
         messages: messageHistory.map(({ role, content }) => ({ role, content })),
         model: appState.settings.model,
-        persona: appState.settings.persona,
+        persona: getActivePersona(),
         files: chat.files,
         stream: true,
+        apiKey: appState.settings.apiKey || undefined,
       }),
     });
 
@@ -1029,7 +1205,13 @@ async function refreshModelOptions() {
   setState({ modelOptionsLoading: true });
 
   try {
-    const response = await fetch('/api/models');
+    const response = await fetch('/api/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiKey: appState.settings.apiKey || undefined,
+      }),
+    });
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
@@ -1094,6 +1276,131 @@ function cancelMessageEdit() {
   });
 }
 
+function activatePersona(personaId) {
+  setState({
+    settings: { ...appState.settings, activePersonaId: personaId },
+  });
+  toastMessage('Persona activated');
+}
+
+function startPersonaEdit(persona) {
+  if (persona.isDefault) {
+    toastMessage('The default persona cannot be edited');
+    return;
+  }
+  const draft = appState.editingPersonaDraft.name || appState.editingPersonaDraft.content
+    ? appState.editingPersonaDraft
+    : { name: persona.name, content: persona.content };
+  setState({
+    editingPersonaId: persona.id,
+    editingPersonaDraft: draft,
+    newPersonaModalOpen: true,
+  });
+  personaModalTitle.textContent = 'Edit Persona';
+  personaNameInput.value = draft.name;
+  personaContentInput.value = draft.content;
+  personaModal.classList.add('show');
+  setTimeout(() => personaNameInput.focus(), 100);
+}
+
+function startPersonaCreate() {
+  const draft = appState.editingPersonaDraft.name || appState.editingPersonaDraft.content
+    ? appState.editingPersonaDraft
+    : { name: '', content: '' };
+  setState({
+    editingPersonaId: null,
+    editingPersonaDraft: draft,
+    newPersonaModalOpen: true,
+  });
+  personaModalTitle.textContent = 'New Persona';
+  personaNameInput.value = draft.name;
+  personaContentInput.value = draft.content;
+  personaModal.classList.add('show');
+  setTimeout(() => personaNameInput.focus(), 100);
+}
+
+function closePersonaModal() {
+  personaModal.classList.remove('show');
+  setState({
+    editingPersonaId: null,
+    editingPersonaDraft: { name: '', content: '' },
+    newPersonaModalOpen: false,
+  });
+}
+
+function savePersona() {
+  const name = personaNameInput.value.trim();
+  const content = personaContentInput.value.trim();
+
+  if (!name) {
+    toastMessage('Persona name cannot be empty');
+    return;
+  }
+
+  if (!content) {
+    toastMessage('Persona content cannot be empty');
+    return;
+  }
+
+  if (appState.editingPersonaId) {
+    // Edit existing persona
+    const personas = appState.personas.map((p) =>
+      p.id === appState.editingPersonaId
+        ? { ...p, name, content }
+        : p,
+    );
+    setState({ personas, editingPersonaId: null, editingPersonaDraft: { name: '', content: '' }, newPersonaModalOpen: false });
+    toastMessage('Persona updated');
+  } else {
+    // Create new persona
+    const newPersona = {
+      id: uuid(),
+      name,
+      content,
+    };
+    setState({
+      personas: [...appState.personas, newPersona],
+      editingPersonaDraft: { name: '', content: '' },
+      newPersonaModalOpen: false,
+    });
+    toastMessage('Persona created');
+  }
+  closePersonaModal();
+}
+
+function removePersona(personaId) {
+  const persona = appState.personas.find((p) => p.id === personaId);
+  if (!persona) return;
+
+  if (persona.isDefault) {
+    toastMessage('The default persona cannot be deleted');
+    return;
+  }
+
+  if (personaId === appState.settings.activePersonaId) {
+    toastMessage('Cannot delete the active persona. Activate another persona first.');
+    return;
+  }
+
+  if (appState.personas.length <= 1) {
+    toastMessage('Cannot delete the last persona. At least one persona is required.');
+    return;
+  }
+
+  openConfirmDialog({
+    title: 'Delete persona',
+    context: 'Personas',
+    description: `Are you sure you want to delete "${persona.name}"? This action cannot be undone.`,
+    confirmLabel: 'Delete persona',
+    confirmVariant: 'danger',
+    onConfirm: () => {
+      const personas = appState.personas.filter((p) => p.id !== personaId);
+      setState({ personas });
+      toastMessage('Persona deleted');
+    },
+  });
+}
+
 function submitMessageEdit() {
   const { editingMessageChatId, editingMessageIndex } = appState;
   if (editingMessageIndex === null || !editingMessageChatId) return;
@@ -1123,8 +1430,7 @@ function submitMessageEdit() {
     editingMessageDraft: '',
   });
 
-  promptInput.value = trimmed;
-  toastMessage('Updated last message. Use retry to resend.');
+  toastMessage('Message updated');
 }
 
 function cancelActiveRequest() {
@@ -1163,13 +1469,27 @@ promptInput.addEventListener('keydown', (e) => {
 
 sendButton.addEventListener('click', handleSend);
 cancelButton.addEventListener('click', cancelActiveRequest);
+
+if (expandTextareaButton) {
+  expandTextareaButton.addEventListener('click', () => {
+    setState({ textareaExpanded: !appState.textareaExpanded });
+  });
+}
 newChatButton.addEventListener('click', () => addChat(appState.selectedFolderId || 'root'));
 fileInput.addEventListener('change', handleFileUpload);
 newFolderButton.addEventListener('click', openNewFolderModal);
 toggleSidebarButton.addEventListener('click', () => setState({ sidebarHidden: !appState.sidebarHidden }));
+function switchSettingsTab(tabName) {
+  setState({ activeSettingsTab: tabName });
+}
+
 settingsButton.addEventListener('click', () => {
   settingsOverlay.classList.add('show');
-  settingsPersonaInput.focus();
+  // Focus on the first input of the active tab
+  const activeTab = appState.activeSettingsTab || 'model';
+  if (activeTab === 'model') {
+    setTimeout(() => settingsModelInput.focus(), 100);
+  }
 });
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) {
@@ -1201,8 +1521,73 @@ folderNameInput.addEventListener('keydown', (e) => {
 closeSettingsButtons.forEach((btn) =>
   btn.addEventListener('click', () => settingsOverlay.classList.remove('show')),
 );
-settingsPersonaInput.addEventListener('input', (e) => {
-  setState({ settings: { ...appState.settings, persona: e.target.value } });
+
+if (tabModelButton) {
+  tabModelButton.addEventListener('click', () => switchSettingsTab('model'));
+}
+
+if (tabPersonaButton) {
+  tabPersonaButton.addEventListener('click', () => switchSettingsTab('persona'));
+}
+
+if (addPersonaButton) {
+  addPersonaButton.addEventListener('click', startPersonaCreate);
+}
+
+if (savePersonaButton) {
+  savePersonaButton.addEventListener('click', savePersona);
+}
+
+if (cancelPersonaButton) {
+  cancelPersonaButton.addEventListener('click', closePersonaModal);
+}
+
+if (closePersonaModalButton) {
+  closePersonaModalButton.addEventListener('click', closePersonaModal);
+}
+
+if (personaModal) {
+  personaModal.addEventListener('click', (e) => {
+    if (e.target === personaModal) {
+      closePersonaModal();
+    }
+  });
+}
+
+if (personaNameInput) {
+  personaNameInput.addEventListener('input', (e) => {
+    appState = {
+      ...appState,
+      editingPersonaDraft: { ...appState.editingPersonaDraft, name: e.target.value },
+    };
+    saveState(appState);
+  });
+  personaNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      personaContentInput.focus();
+    }
+  });
+}
+
+if (personaContentInput) {
+  personaContentInput.addEventListener('input', (e) => {
+    appState = {
+      ...appState,
+      editingPersonaDraft: { ...appState.editingPersonaDraft, content: e.target.value },
+    };
+    saveState(appState);
+  });
+  personaContentInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      savePersona();
+    }
+  });
+}
+
+settingsApiKeyInput.addEventListener('input', (e) => {
+  setState({ settings: { ...appState.settings, apiKey: e.target.value } });
 });
 settingsModelInput.addEventListener('input', (e) => {
   const value = e.target.value;
