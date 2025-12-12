@@ -846,16 +846,19 @@ textarea::placeholder {
   position: relative;
 }
 
-.message.assistant.streaming::after {
-  content: '';
-  position: absolute;
-  bottom: 12px;
-  left: 14px;
-  width: 8px;
-  height: 8px;
-  background: var(--accent);
-  border-radius: 50%;
-  animation: pulse 1.5s ease-in-out infinite;
+.message.assistant.streaming .message-content:empty::before {
+  content: 'Thinking...';
+  color: var(--muted);
+  font-style: italic;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.message.assistant.streaming .message-content:not(:empty)::after {
+  content: '▋';
+  color: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+  margin-left: 2px;
+  display: inline-block;
 }
 
 .message-content {
@@ -1366,13 +1369,6 @@ textarea::placeholder {
   border-radius: 6px;
 }
 
-/* Loading state for streaming messages */
-.message.streaming .message-content::after {
-  content: '▋';
-  color: var(--accent);
-  animation: pulse 1s ease-in-out infinite;
-  margin-left: 2px;
-}
 
 /* Smooth scroll behavior */
 html {
@@ -1393,22 +1389,143 @@ html {
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+    overflow: hidden;
   }
-  .sidebar {
+  
+  .app-shell.sidebar-hidden {
+    grid-template-columns: 1fr;
+    grid-template-rows: 50px 1fr;
+  }
+  
+  .app-shell:not(.sidebar-hidden) {
+    grid-template-rows: auto 1fr;
+  }
+  
+  /* Collapsed state: horizontal bar at top */
+  .app-shell.sidebar-hidden .sidebar {
+    position: relative;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 50px;
+    padding: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    z-index: 10;
+    display: flex;
     flex-direction: row;
-    overflow-x: auto;
+    align-items: center;
+    justify-content: center;
+    grid-row: 1;
+    transition: all var(--transition-base);
   }
+  
+  .app-shell.sidebar-hidden .sidebar-content {
+    display: none;
+  }
+  
+  .app-shell.sidebar-hidden .sidebar-toggle {
+    position: static;
+    width: 100%;
+    height: 50px;
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--text);
+  }
+  
+  .app-shell.sidebar-hidden .sidebar-toggle:hover {
+    width: 100%;
+    transform: none;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  
+  /* Expanded state: vertical menu that pushes content down */
+  .app-shell:not(.sidebar-hidden) .sidebar {
+    position: relative;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: auto;
+    min-height: 200px;
+    max-height: 70vh;
+    z-index: 10;
+    grid-row: 1;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+    transition: all var(--transition-base);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, #080d19 0%, #0b1222 100%);
+  }
+  
+  .app-shell:not(.sidebar-hidden) .sidebar-toggle {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    box-shadow: var(--glow);
+    font-size: 18px;
+    z-index: 2;
+  }
+  
+  .app-shell:not(.sidebar-hidden) .sidebar-content {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 0;
+    width: 100%;
+    height: auto;
+    min-height: 150px;
+    max-height: calc(70vh - 28px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+    flex: 1;
+    min-height: 0;
+  }
+  
+  /* Workspace adjusts based on sidebar state - always in row 2 */
+  .workspace {
+    grid-row: 2;
+    grid-column: 1;
+    padding-top: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  
   .workspace-header {
     grid-template-columns: 1fr;
   }
+  
   .composer-box {
     grid-template-columns: 1fr;
   }
+  
   .composer-buttons {
     flex-direction: row;
     width: 100%;
   }
+  
   .composer-buttons button {
     flex: 1;
   }
 }
+

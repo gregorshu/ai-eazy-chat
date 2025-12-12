@@ -521,10 +521,54 @@ function renderFolders() {
     });
   }
 
+let lastRenderedChatId = null;
+let lastRenderedMessageCount = 0;
+
+function updateStreamingMessage(content) {
+  const messageDivs = messageContainer.querySelectorAll('.message.assistant.streaming');
+  if (messageDivs.length > 0) {
+    const lastMessageDiv = messageDivs[messageDivs.length - 1];
+    const contentDiv = lastMessageDiv.querySelector('.message-content');
+    if (contentDiv) {
+      contentDiv.textContent = content;
+      // Smooth scroll to bottom
+      requestAnimationFrame(() => {
+        messageContainer.scrollTop = messageContainer.scrollHeight;
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
 function renderMessages() {
-  messageContainer.innerHTML = '';
   const chat = getSelectedChat();
   if (!chat) return;
+  
+  const needsFullRender = 
+    lastRenderedChatId !== chat.id ||
+    lastRenderedMessageCount !== chat.messages.length ||
+    chat.messages.some((msg, idx) => {
+      const existingDiv = messageContainer.children[idx];
+      if (!existingDiv) return true;
+      const isStreaming = msg.role === 'assistant' && msg.streaming;
+      if (isStreaming) return false; // Don't rebuild if streaming, we'll update in place
+      return existingDiv.className !== `message ${msg.role}`;
+    });
+
+  // If we have a streaming message and it's just a content update, update in place
+  const streamingMessage = chat.messages.find(m => m.role === 'assistant' && m.streaming);
+  if (streamingMessage && !needsFullRender && lastRenderedChatId === chat.id) {
+    if (updateStreamingMessage(streamingMessage.content)) {
+      return; // Successfully updated in place
+    }
+  }
+
+  // Full render needed
+  lastRenderedChatId = chat.id;
+  lastRenderedMessageCount = chat.messages.length;
+  
+  messageContainer.innerHTML = '';
   const lastUserIndex = findLastUserIndex(chat.messages);
   chat.messages.forEach((msg, index) => {
     const div = document.createElement('div');
@@ -782,8 +826,15 @@ function render() {
   renderFiles();
   renderModelOptions();
   renderPersonas();
-  toggleSidebarButton.textContent = appState.sidebarHidden ? '⟩' : '⟨';
-  toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
+  // On mobile (narrow screens), use down/up arrows; on desktop use left/right
+  const isMobile = window.innerWidth <= 900;
+  if (isMobile) {
+    toggleSidebarButton.textContent = appState.sidebarHidden ? '▾' : '▴';
+    toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
+  } else {
+    toggleSidebarButton.textContent = appState.sidebarHidden ? '⟩' : '⟨';
+    toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
+  }
   // Persona tab is now managed separately, no need to set input value here
   settingsModelInput.value = appState.settings.model || 'openrouter/auto';
   settingsApiKeyInput.value = appState.settings.apiKey || '';
@@ -1021,7 +1072,22 @@ function persistChatUpdates(partial) {
   const chats = appState.chats.map((chat) =>
     chat.id === appState.selectedChatId ? { ...chat, ...partial } : chat,
   );
-  setState({ chats });
+  appState.chats = chats;
+  saveState(appState);
+  
+  // For streaming updates, update in place without full render
+  if (partial.messages) {
+    const streamingMsg = partial.messages.find(m => m.role === 'assistant' && m.streaming);
+    if (streamingMsg && lastRenderedChatId === appState.selectedChatId) {
+      // Update streaming message in place
+      if (updateStreamingMessage(streamingMsg.content)) {
+        return; // Successfully updated in place, skip full render
+      }
+    }
+  }
+  
+  // Full render needed
+  render();
 }
 
 function findLastUserIndex(messages) {
@@ -1067,8 +1133,16 @@ async function sendChatCompletion(messageHistory) {
   if (!chat || !messageHistory.length) return;
 
   let assistantContent = '';
-  const pendingMessage = { role: 'assistant', content: assistantContent, streaming: true };
-  persistChatUpdates({ messages: [...messageHistory, pendingMessage] });
+  const pendingMessage = { role: 'assistant', content: '', streaming: true };
+  
+  // Add user message and empty streaming message, then render once
+  const chats = appState.chats.map((c) =>
+    c.id === chat.id ? { ...c, messages: [...messageHistory, pendingMessage] } : c,
+  );
+  appState.chats = chats;
+  saveState(appState);
+  render(); // Initial render to show loading state
+  
   const controller = new AbortController();
   activeAbortController = controller;
   setRequestPending(true);
@@ -1081,24 +1155,50 @@ async function sendChatCompletion(messageHistory) {
       onChunk: (chunk) => {
         if (!chunk) return;
         assistantContent += chunk;
-        persistChatUpdates({
-          messages: [
-            ...messageHistory,
-            { role: 'assistant', content: assistantContent, streaming: true },
-          ],
-        });
+        // Update state for persistence
+        const chat = getSelectedChat();
+        if (chat) {
+          const updatedMessages = chat.messages.map((msg, idx) => {
+            if (idx === chat.messages.length - 1 && msg.role === 'assistant' && msg.streaming) {
+              return { ...msg, content: assistantContent };
+            }
+            return msg;
+          });
+          const chats = appState.chats.map((c) =>
+            c.id === chat.id ? { ...c, messages: updatedMessages } : c,
+          );
+          appState.chats = chats;
+          // Don't save state on every chunk to avoid performance issues
+        }
+        // Update streaming message in place without full render
+        updateStreamingMessage(assistantContent);
       },
     });
     const finalContent = data?.content || assistantContent || '(no content returned)';
     const assistantMessage = { role: 'assistant', content: finalContent, streaming: false };
-    persistChatUpdates({ messages: [...messageHistory, assistantMessage] });
+    const finalChats = appState.chats.map((c) =>
+      c.id === chat.id ? { ...c, messages: [...messageHistory, assistantMessage] } : c,
+    );
+    appState.chats = finalChats;
+    saveState(appState);
+    render(); // Final render to remove streaming class and add copy button
   } catch (err) {
     if (err.name === 'AbortError') {
-      persistChatUpdates({ messages: messageHistory });
+      const canceledChats = appState.chats.map((c) =>
+        c.id === chat.id ? { ...c, messages: messageHistory } : c,
+      );
+      appState.chats = canceledChats;
+      saveState(appState);
+      render();
       toastMessage('Request canceled');
       return;
     }
-    persistChatUpdates({ messages: messageHistory });
+    const errorChats = appState.chats.map((c) =>
+      c.id === chat.id ? { ...c, messages: messageHistory } : c,
+    );
+    appState.chats = errorChats;
+    saveState(appState);
+    render();
     toastMessage(err.message, 3200);
   } finally {
     if (activeAbortController === controller) {
@@ -1634,6 +1734,20 @@ document.addEventListener('click', (event) => {
     setState({ modelDropdownOpen: false, modelSearch: '' });
   }
 });
+
+function checkScreenWidth() {
+  const isNarrow = window.innerWidth <= 900;
+  if (isNarrow && !appState.sidebarHidden) {
+    // Auto-collapse on narrow screens
+    setState({ sidebarHidden: true });
+  }
+  // Re-render to update icon based on screen size
+  render();
+}
+
+// Check on load and resize
+checkScreenWidth();
+window.addEventListener('resize', checkScreenWidth);
 
 render();
 refreshModelOptions();
