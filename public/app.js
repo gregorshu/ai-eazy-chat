@@ -1923,17 +1923,25 @@ function moveChat(chatId, folderId) {
   const chat = appState.chats.find(c => c.id === chatId);
   if (!chat) return;
   
+  // Close the menu before moving
+  const chatEl = getChatElement(chatId);
+  if (chatEl) {
+    const menu = chatEl.querySelector('.chat-menu');
+    if (menu) {
+      menu.classList.remove('show');
+    }
+  }
+  openChatMenuId = null;
+  
   // Update state
   const chats = appState.chats.map((c) =>
     c.id === chatId ? { ...c, folderId } : c,
   );
-  openChatMenuId = null;
   appState.chats = chats;
   appState.selectedFolderId = folderId;
   saveState(appState);
   
   // Move chat element in DOM
-  const chatEl = getChatElement(chatId);
   if (chatEl) {
     // Remove from old folder
     chatEl.remove();
