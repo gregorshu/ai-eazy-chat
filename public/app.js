@@ -219,10 +219,122 @@ if (appState.personas.length > 0 && !appState.personas.find(p => p.id === appSta
   saveState(appState);
 }
 
+// Track previous state for change detection
+let prevState = null;
+
 function setState(update) {
+  prevState = { ...appState };
   appState = { ...appState, ...update };
   saveState(appState);
-  render();
+  
+  // Determine if we need full render or can use granular updates
+  const needsFullRender = 
+    update.folders !== undefined ||
+    update.chats !== undefined ||
+    update.sidebarHidden !== undefined ||
+    update.textareaExpanded !== undefined ||
+    update.newFolderModalOpen !== undefined ||
+    update.newPersonaModalOpen !== undefined ||
+    update.settings !== undefined ||
+    update.modelOptions !== undefined ||
+    update.modelDropdownOpen !== undefined ||
+    update.activeSettingsTab !== undefined;
+  
+  if (needsFullRender) {
+    render();
+  } else {
+    // Use granular updates for sidebar state changes
+    syncSidebarState(prevState, update);
+    // Still need to render other parts (messages, files, etc.)
+    renderMessages();
+    renderFiles();
+    renderModelOptions();
+    renderPersonas();
+  }
+}
+
+// Sync sidebar state with granular updates
+function syncSidebarState(prevState, update) {
+  if (!prevState) return;
+  
+  // Update selected folder
+  if (update.selectedFolderId !== undefined && update.selectedFolderId !== prevState.selectedFolderId) {
+    updateFolderActiveState(prevState.selectedFolderId, false);
+    updateFolderActiveState(update.selectedFolderId, true);
+  }
+  
+  // Update selected chat
+  if (update.selectedChatId !== undefined && update.selectedChatId !== prevState.selectedChatId) {
+    updateChatActiveState(prevState.selectedChatId, false);
+    updateChatActiveState(update.selectedChatId, true);
+  }
+  
+  // Update expanded folders
+  if (update.expandedFolders) {
+    Object.keys(update.expandedFolders).forEach(folderId => {
+      const newExpanded = update.expandedFolders[folderId] !== false;
+      const oldExpanded = prevState.expandedFolders?.[folderId] !== false;
+      if (newExpanded !== oldExpanded) {
+        updateFolderExpandedState(folderId, newExpanded);
+      }
+    });
+  }
+  
+  // Update folder editing state
+  if (update.editingFolderId !== undefined) {
+    if (prevState.editingFolderId) {
+      const prevFolder = appState.folders.find(f => f.id === prevState.editingFolderId);
+      if (prevFolder) {
+        const folderEl = getFolderElement(prevFolder.id);
+        updateFolderElement(folderEl, prevFolder);
+      }
+    }
+    if (update.editingFolderId) {
+      const folder = appState.folders.find(f => f.id === update.editingFolderId);
+      if (folder) {
+        const folderEl = getFolderElement(folder.id);
+        updateFolderElement(folderEl, folder);
+      }
+    }
+  }
+  
+  // Update chat editing state
+  if (update.editingChatId !== undefined) {
+    if (prevState.editingChatId) {
+      const prevChat = appState.chats.find(c => c.id === prevState.editingChatId);
+      if (prevChat) {
+        const chatEl = getChatElement(prevChat.id);
+        updateChatElement(chatEl, prevChat);
+      }
+    }
+    if (update.editingChatId) {
+      const chat = appState.chats.find(c => c.id === update.editingChatId);
+      if (chat) {
+        const chatEl = getChatElement(chat.id);
+        updateChatElement(chatEl, chat);
+      }
+    }
+  }
+  
+  // Update openChatMenuId (handled in menu toggle, but sync if needed)
+  if (update.openChatMenuId !== undefined && update.openChatMenuId !== openChatMenuId) {
+    // Menu toggle is handled directly in DOM, but we can sync here if needed
+    if (prevState.openChatMenuId) {
+      const prevChatEl = getChatElement(prevState.openChatMenuId);
+      if (prevChatEl) {
+        const menu = prevChatEl.querySelector('.chat-menu');
+        if (menu) menu.classList.remove('show');
+      }
+    }
+    if (update.openChatMenuId) {
+      const chatEl = getChatElement(update.openChatMenuId);
+      if (chatEl) {
+        const menu = chatEl.querySelector('.chat-menu');
+        if (menu) menu.classList.add('show');
+      }
+    }
+    openChatMenuId = update.openChatMenuId;
+  }
 }
 
 function getSelectedChat() {
@@ -324,84 +436,291 @@ function updateChatActiveState(chatId, isActive) {
   }
 }
 
-function renderFolders() {
-  folderList.innerHTML = '';
-  appState.folders.forEach((folder) => {
-    const li = document.createElement('li');
-    li.className = 'folder-item';
-    li.setAttribute('data-folder-id', folder.id);
+// Render a single chat element
+function renderChat(chat) {
+  const chatItem = document.createElement('li');
+  chatItem.className = chat.id === appState.selectedChatId ? 'active chat-row' : 'chat-row';
+  chatItem.setAttribute('data-chat-id', chat.id);
+  chatItem.onclick = () => setState({ selectedChatId: chat.id });
 
-    const header = document.createElement('div');
-    header.className = 'folder-header';
-    if (folder.id === appState.selectedFolderId) {
-      header.classList.add('active');
+  const info = document.createElement('div');
+  info.className = 'chat-row-main';
+  const name = document.createElement('span');
+  name.textContent = chat.name;
+  info.appendChild(name);
+
+  const menuButton = document.createElement('button');
+  menuButton.className = 'ghost icon chat-menu-trigger';
+  menuButton.textContent = '⋯';
+  menuButton.onclick = (e) => {
+    e.stopPropagation();
+    const wasOpen = openChatMenuId === chat.id;
+    openChatMenuId = wasOpen ? null : chat.id;
+    // Update menu visibility without full render
+    const menu = chatItem.querySelector('.chat-menu');
+    if (menu) {
+      menu.classList.toggle('show', !wasOpen);
     }
-    const headerMain = document.createElement('div');
-    headerMain.className = 'folder-header-main';
+  };
 
-    const toggle = document.createElement('button');
-    toggle.className = 'ghost icon folder-toggle';
-    const isExpanded = appState.expandedFolders[folder.id] !== false;
-    toggle.textContent = isExpanded ? '▾' : '▸';
-    toggle.onclick = (e) => {
+  const menu = document.createElement('div');
+  menu.className = 'chat-menu';
+  if (openChatMenuId === chat.id) {
+    menu.classList.add('show');
+  }
+  menu.onclick = (e) => e.stopPropagation();
+
+  const renameBtn = document.createElement('button');
+  renameBtn.textContent = 'Rename';
+  renameBtn.onclick = (e) => {
+    e.stopPropagation();
+    startChatRename(chat);
+  };
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.textContent = 'Delete';
+  deleteBtn.className = 'danger';
+  deleteBtn.onclick = (e) => {
+    e.stopPropagation();
+    removeChat(chat.id);
+  };
+
+  const moveWrap = document.createElement('div');
+  moveWrap.className = 'move-row';
+  const moveLabel = document.createElement('label');
+  moveLabel.textContent = 'Move to';
+  const moveSelect = document.createElement('select');
+  appState.folders.forEach((f) => {
+    const option = document.createElement('option');
+    option.value = f.id;
+    option.textContent = f.name;
+    option.selected = f.id === chat.folderId;
+    moveSelect.appendChild(option);
+  });
+  moveSelect.onchange = (e) => {
+    e.stopPropagation();
+    moveChat(chat.id, e.target.value);
+  };
+  moveSelect.onclick = (e) => e.stopPropagation();
+  moveSelect.onmousedown = (e) => e.stopPropagation();
+  moveWrap.appendChild(moveLabel);
+  moveWrap.appendChild(moveSelect);
+
+  if (appState.editingChatId === chat.id) {
+    const renameForm = document.createElement('div');
+    renameForm.className = 'rename-row';
+    const input = document.createElement('input');
+    input.className = 'text-input';
+    input.value =
+      appState.editingChatDraft !== ''
+        ? appState.editingChatDraft
+        : chat.name;
+    input.placeholder = 'Chat name';
+    input.oninput = (e) => {
       e.stopPropagation();
-      const currentlyExpanded = appState.expandedFolders[folder.id] !== false;
-      setState({
-        expandedFolders: {
-          ...appState.expandedFolders,
-          [folder.id]: !currentlyExpanded,
-        },
-      });
+      appState = { ...appState, editingChatDraft: e.target.value, editingChatId: chat.id };
+      saveState(appState);
     };
-
-    const title = document.createElement('span');
-    title.textContent = folder.name;
-    headerMain.appendChild(toggle);
-    headerMain.appendChild(title);
-
-    headerMain.onclick = () => setState({ selectedFolderId: folder.id });
 
     const actions = document.createElement('div');
-    actions.className = 'folder-actions';
-    const editBtn = document.createElement('button');
-    editBtn.className = 'ghost icon';
-    editBtn.textContent = '✎';
-    editBtn.title = 'Rename folder';
-    editBtn.onclick = (e) => {
+    actions.className = 'rename-actions';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = (e) => {
       e.stopPropagation();
-      startFolderRename(folder);
+      submitChatRename(chat.id);
     };
 
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'ghost icon danger';
-    deleteBtn.textContent = '✕';
-    deleteBtn.title = 'Delete folder';
-    deleteBtn.onclick = (e) => {
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ghost';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = (e) => {
       e.stopPropagation();
-      removeFolder(folder.id);
+      cancelChatRename();
     };
 
-    const hasChats = appState.chats.some((chat) => chat.folderId === folder.id);
-    if (folder.id === 'root') {
-      deleteBtn.disabled = true;
-      deleteBtn.title = 'Default folder cannot be deleted';
-    } else if (hasChats) {
-      deleteBtn.title = 'Move chats out before deleting';
-    }
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    renameForm.appendChild(input);
+    renameForm.appendChild(actions);
+    menu.appendChild(renameForm);
+  } else {
+    menu.appendChild(renameBtn);
+  }
 
-    actions.appendChild(editBtn);
-    actions.appendChild(deleteBtn);
+  menu.appendChild(deleteBtn);
+  menu.appendChild(moveWrap);
 
-    header.appendChild(headerMain);
-    header.appendChild(actions);
+  chatItem.appendChild(info);
+  chatItem.appendChild(menuButton);
+  chatItem.appendChild(menu);
+  
+  return chatItem;
+}
 
-    li.appendChild(header);
+// Render a single folder element with all its chats
+function renderFolder(folder) {
+  const li = document.createElement('li');
+  li.className = 'folder-item';
+  li.setAttribute('data-folder-id', folder.id);
 
-    const chatsList = document.createElement('ul');
-    chatsList.className = 'chat-list';
-    chatsList.style.display = appState.expandedFolders[folder.id] === false ? 'none' : 'flex';
+  const header = document.createElement('div');
+  header.className = 'folder-header';
+  if (folder.id === appState.selectedFolderId) {
+    header.classList.add('active');
+  }
+  const headerMain = document.createElement('div');
+  headerMain.className = 'folder-header-main';
 
-    if (appState.editingFolderId === folder.id) {
+  const toggle = document.createElement('button');
+  toggle.className = 'ghost icon folder-toggle';
+  const isExpanded = appState.expandedFolders[folder.id] !== false;
+  toggle.textContent = isExpanded ? '▾' : '▸';
+  toggle.onclick = (e) => {
+    e.stopPropagation();
+    const currentlyExpanded = appState.expandedFolders[folder.id] !== false;
+    setState({
+      expandedFolders: {
+        ...appState.expandedFolders,
+        [folder.id]: !currentlyExpanded,
+      },
+    });
+  };
+
+  const title = document.createElement('span');
+  title.textContent = folder.name;
+  headerMain.appendChild(toggle);
+  headerMain.appendChild(title);
+
+  headerMain.onclick = () => setState({ selectedFolderId: folder.id });
+
+  const actions = document.createElement('div');
+  actions.className = 'folder-actions';
+  const editBtn = document.createElement('button');
+  editBtn.className = 'ghost icon';
+  editBtn.textContent = '✎';
+  editBtn.title = 'Rename folder';
+  editBtn.onclick = (e) => {
+    e.stopPropagation();
+    startFolderRename(folder);
+  };
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'ghost icon danger';
+  deleteBtn.textContent = '✕';
+  deleteBtn.title = 'Delete folder';
+  deleteBtn.onclick = (e) => {
+    e.stopPropagation();
+    removeFolder(folder.id);
+  };
+
+  const hasChats = appState.chats.some((chat) => chat.folderId === folder.id);
+  if (folder.id === 'root') {
+    deleteBtn.disabled = true;
+    deleteBtn.title = 'Default folder cannot be deleted';
+  } else if (hasChats) {
+    deleteBtn.title = 'Move chats out before deleting';
+  }
+
+  actions.appendChild(editBtn);
+  actions.appendChild(deleteBtn);
+
+  header.appendChild(headerMain);
+  header.appendChild(actions);
+
+  li.appendChild(header);
+
+  const chatsList = document.createElement('ul');
+  chatsList.className = 'chat-list';
+  chatsList.style.display = appState.expandedFolders[folder.id] === false ? 'none' : 'flex';
+
+  if (appState.editingFolderId === folder.id) {
+    const renameRow = document.createElement('div');
+    renameRow.className = 'folder-rename';
+    renameRow.onclick = (e) => e.stopPropagation();
+
+    const input = document.createElement('input');
+    input.className = 'text-input';
+    input.placeholder = 'Folder name';
+    input.value =
+      appState.editingFolderDraft !== '' ? appState.editingFolderDraft : folder.name;
+    input.oninput = (e) => {
+      e.stopPropagation();
+      appState = { ...appState, editingFolderDraft: e.target.value, editingFolderId: folder.id };
+      saveState(appState);
+    };
+
+    const renameActions = document.createElement('div');
+    renameActions.className = 'rename-actions';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = (e) => {
+      e.stopPropagation();
+      submitFolderRename(folder.id);
+    };
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ghost';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = (e) => {
+      e.stopPropagation();
+      cancelFolderRename();
+    };
+
+    renameActions.appendChild(saveBtn);
+    renameActions.appendChild(cancelBtn);
+
+    renameRow.appendChild(input);
+    renameRow.appendChild(renameActions);
+    li.appendChild(renameRow);
+  }
+
+  const chats = appState.chats.filter((chat) => chat.folderId === folder.id);
+  chats.forEach((chat) => {
+    const chatItem = renderChat(chat);
+    chatsList.appendChild(chatItem);
+  });
+
+  li.appendChild(chatsList);
+  
+  return li;
+}
+
+// Update an existing folder element in place
+function updateFolderElement(folderEl, folder) {
+  if (!folderEl) return;
+  
+  // Update header active state
+  const header = folderEl.querySelector('.folder-header');
+  if (header) {
+    header.classList.toggle('active', folder.id === appState.selectedFolderId);
+  }
+  
+  // Update folder name
+  const title = folderEl.querySelector('.folder-header-main span');
+  if (title) {
+    title.textContent = folder.name;
+  }
+  
+  // Update expanded state
+  const toggle = folderEl.querySelector('.folder-toggle');
+  const chatsList = folderEl.querySelector('.chat-list');
+  const isExpanded = appState.expandedFolders[folder.id] !== false;
+  if (toggle) {
+    toggle.textContent = isExpanded ? '▾' : '▸';
+  }
+  if (chatsList) {
+    chatsList.style.display = isExpanded ? 'flex' : 'none';
+  }
+  
+  // Handle editing state
+  const existingRenameRow = folderEl.querySelector('.folder-rename');
+  if (appState.editingFolderId === folder.id) {
+    if (!existingRenameRow) {
       const renameRow = document.createElement('div');
       renameRow.className = 'folder-rename';
       renameRow.onclick = (e) => e.stopPropagation();
@@ -409,8 +728,7 @@ function renderFolders() {
       const input = document.createElement('input');
       input.className = 'text-input';
       input.placeholder = 'Folder name';
-      input.value =
-        appState.editingFolderDraft !== '' ? appState.editingFolderDraft : folder.name;
+      input.value = appState.editingFolderDraft !== '' ? appState.editingFolderDraft : folder.name;
       input.oninput = (e) => {
         e.stopPropagation();
         appState = { ...appState, editingFolderDraft: e.target.value, editingFolderId: folder.id };
@@ -438,133 +756,220 @@ function renderFolders() {
 
       renameActions.appendChild(saveBtn);
       renameActions.appendChild(cancelBtn);
-
       renameRow.appendChild(input);
       renameRow.appendChild(renameActions);
-      li.appendChild(renameRow);
+      
+      const header = folderEl.querySelector('.folder-header');
+      if (header) {
+        header.insertAdjacentElement('afterend', renameRow);
+      }
+    } else {
+      const input = existingRenameRow.querySelector('input');
+      if (input) {
+        input.value = appState.editingFolderDraft !== '' ? appState.editingFolderDraft : folder.name;
+      }
     }
+  } else if (existingRenameRow) {
+    existingRenameRow.remove();
+  }
+  
+  // Update delete button state
+  const deleteBtn = folderEl.querySelector('.folder-actions .danger');
+  if (deleteBtn) {
+    const hasChats = appState.chats.some((chat) => chat.folderId === folder.id);
+    if (folder.id === 'root') {
+      deleteBtn.disabled = true;
+      deleteBtn.title = 'Default folder cannot be deleted';
+    } else if (hasChats) {
+      deleteBtn.title = 'Move chats out before deleting';
+    } else {
+      deleteBtn.disabled = false;
+      deleteBtn.title = 'Delete folder';
+    }
+  }
+}
 
-    const chats = appState.chats.filter((chat) => chat.folderId === folder.id);
-    chats.forEach((chat) => {
-      const chatItem = document.createElement('li');
-      chatItem.className = chat.id === appState.selectedChatId ? 'active chat-row' : 'chat-row';
-      chatItem.setAttribute('data-chat-id', chat.id);
-      chatItem.onclick = () => setState({ selectedChatId: chat.id });
-
-      const info = document.createElement('div');
-      info.className = 'chat-row-main';
-      const name = document.createElement('span');
-      name.textContent = chat.name;
-      info.appendChild(name);
-
-      const menuButton = document.createElement('button');
-      menuButton.className = 'ghost icon chat-menu-trigger';
-      menuButton.textContent = '⋯';
-      menuButton.onclick = (e) => {
+// Update an existing chat element in place
+function updateChatElement(chatEl, chat) {
+  if (!chatEl) return;
+  
+  // Update active state
+  chatEl.classList.toggle('active', chat.id === appState.selectedChatId);
+  
+  // Update chat name
+  const nameSpan = chatEl.querySelector('.chat-row-main span');
+  if (nameSpan) {
+    nameSpan.textContent = chat.name;
+  }
+  
+  // Update menu visibility
+  const menu = chatEl.querySelector('.chat-menu');
+  if (menu) {
+    menu.classList.toggle('show', openChatMenuId === chat.id);
+  }
+  
+  // Update move select
+  const moveSelect = chatEl.querySelector('.move-row select');
+  if (moveSelect) {
+    moveSelect.value = chat.folderId;
+  }
+  
+  // Handle editing state
+  const existingRenameForm = chatEl.querySelector('.rename-row');
+  const chatMenu = chatEl.querySelector('.chat-menu');
+  
+  if (appState.editingChatId === chat.id) {
+    if (!existingRenameForm && chatMenu) {
+      const renameForm = document.createElement('div');
+      renameForm.className = 'rename-row';
+      const input = document.createElement('input');
+      input.className = 'text-input';
+      input.value = appState.editingChatDraft !== '' ? appState.editingChatDraft : chat.name;
+      input.placeholder = 'Chat name';
+      input.oninput = (e) => {
         e.stopPropagation();
-        const wasOpen = openChatMenuId === chat.id;
-        openChatMenuId = wasOpen ? null : chat.id;
-        renderFolders();
+        appState = { ...appState, editingChatDraft: e.target.value, editingChatId: chat.id };
+        saveState(appState);
       };
 
-      const menu = document.createElement('div');
-      menu.className = 'chat-menu';
-      if (openChatMenuId === chat.id) {
-        menu.classList.add('show');
+      const actions = document.createElement('div');
+      actions.className = 'rename-actions';
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'primary';
+      saveBtn.textContent = 'Save';
+      saveBtn.onclick = (e) => {
+        e.stopPropagation();
+        submitChatRename(chat.id);
+      };
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'ghost';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = (e) => {
+        e.stopPropagation();
+        cancelChatRename();
+      };
+
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+      renameForm.appendChild(input);
+      renameForm.appendChild(actions);
+      
+      // Remove rename button and add form
+      const renameBtn = chatMenu.querySelector('button:first-child');
+      if (renameBtn && renameBtn.textContent === 'Rename') {
+        renameBtn.replaceWith(renameForm);
       }
-      menu.onclick = (e) => e.stopPropagation();
+    } else if (existingRenameForm) {
+      const input = existingRenameForm.querySelector('input');
+      if (input) {
+        input.value = appState.editingChatDraft !== '' ? appState.editingChatDraft : chat.name;
+      }
+    }
+  } else if (existingRenameForm && chatMenu) {
+    // Remove rename form and restore rename button
+    const renameBtn = document.createElement('button');
+    renameBtn.textContent = 'Rename';
+    renameBtn.onclick = (e) => {
+      e.stopPropagation();
+      startChatRename(chat);
+    };
+    existingRenameForm.replaceWith(renameBtn);
+  }
+}
 
-      const renameBtn = document.createElement('button');
-      renameBtn.textContent = 'Rename';
-      renameBtn.onclick = (e) => {
-        e.stopPropagation();
-        startChatRename(chat);
-      };
-
-      const deleteBtn = document.createElement('button');
-      deleteBtn.textContent = 'Delete';
-      deleteBtn.className = 'danger';
-      deleteBtn.onclick = (e) => {
-        e.stopPropagation();
-        removeChat(chat.id);
-      };
-
-      const moveWrap = document.createElement('div');
-      moveWrap.className = 'move-row';
-      const moveLabel = document.createElement('label');
-      moveLabel.textContent = 'Move to';
-      const moveSelect = document.createElement('select');
-      appState.folders.forEach((f) => {
-        const option = document.createElement('option');
-        option.value = f.id;
-        option.textContent = f.name;
-        option.selected = f.id === chat.folderId;
-        moveSelect.appendChild(option);
-      });
-      moveSelect.onchange = (e) => {
-        e.stopPropagation();
-        moveChat(chat.id, e.target.value);
-      };
-      moveSelect.onclick = (e) => e.stopPropagation();
-      moveSelect.onmousedown = (e) => e.stopPropagation();
-      moveWrap.appendChild(moveLabel);
-      moveWrap.appendChild(moveSelect);
-
-      if (appState.editingChatId === chat.id) {
-        const renameForm = document.createElement('div');
-        renameForm.className = 'rename-row';
-        const input = document.createElement('input');
-        input.className = 'text-input';
-        input.value =
-          appState.editingChatDraft !== ''
-            ? appState.editingChatDraft
-            : chat.name;
-        input.placeholder = 'Chat name';
-        input.oninput = (e) => {
-          e.stopPropagation();
-          appState = { ...appState, editingChatDraft: e.target.value, editingChatId: chat.id };
-          saveState(appState);
-        };
-
-        const actions = document.createElement('div');
-        actions.className = 'rename-actions';
-
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'primary';
-        saveBtn.textContent = 'Save';
-        saveBtn.onclick = (e) => {
-          e.stopPropagation();
-          submitChatRename(chat.id);
-        };
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'ghost';
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.onclick = (e) => {
-          e.stopPropagation();
-          cancelChatRename();
-        };
-
-        actions.appendChild(saveBtn);
-        actions.appendChild(cancelBtn);
-        renameForm.appendChild(input);
-        renameForm.appendChild(actions);
-        menu.appendChild(renameForm);
+function renderFolders() {
+  // Get current folder IDs in DOM
+  const existingFolderIds = new Set(
+    Array.from(folderList.children)
+      .map(el => el.getAttribute('data-folder-id'))
+      .filter(Boolean)
+  );
+  const currentFolderIds = new Set(appState.folders.map(f => f.id));
+  
+  // Remove folders that no longer exist
+  existingFolderIds.forEach(folderId => {
+    if (!currentFolderIds.has(folderId)) {
+      const folderEl = getFolderElement(folderId);
+      if (folderEl) {
+        folderEl.remove();
+      }
+    }
+  });
+  
+  // Update or create folders
+  appState.folders.forEach((folder, index) => {
+    let folderEl = getFolderElement(folder.id);
+    const isNew = !folderEl;
+    
+    if (isNew) {
+      // Create new folder element
+      folderEl = renderFolder(folder);
+      // Insert at correct position
+      const nextFolder = appState.folders[index + 1];
+      if (nextFolder) {
+        const nextEl = getFolderElement(nextFolder.id);
+        if (nextEl) {
+          folderList.insertBefore(folderEl, nextEl);
+        } else {
+          folderList.appendChild(folderEl);
+        }
       } else {
-        menu.appendChild(renameBtn);
+        folderList.appendChild(folderEl);
       }
-
-      menu.appendChild(deleteBtn);
-      menu.appendChild(moveWrap);
-
-      chatItem.appendChild(info);
-      chatItem.appendChild(menuButton);
-      chatItem.appendChild(menu);
-      chatsList.appendChild(chatItem);
-    });
-
-    li.appendChild(chatsList);
-    folderList.appendChild(li);
+    } else {
+      // Update existing folder element
+      updateFolderElement(folderEl, folder);
+      
+      // Sync chats in this folder
+      const existingChatIds = new Set(
+        Array.from(folderEl.querySelectorAll('.chat-list > li'))
+          .map(el => el.getAttribute('data-chat-id'))
+          .filter(Boolean)
+      );
+      const currentChats = appState.chats.filter(c => c.folderId === folder.id);
+      const currentChatIds = new Set(currentChats.map(c => c.id));
+      
+      // Remove chats that no longer belong to this folder
+      existingChatIds.forEach(chatId => {
+        if (!currentChatIds.has(chatId)) {
+          const chatEl = getChatElement(chatId);
+          if (chatEl) {
+            chatEl.remove();
+          }
+        }
+      });
+      
+      // Add or update chats
+      const chatsList = folderEl.querySelector('.chat-list');
+      if (chatsList) {
+        currentChats.forEach((chat, chatIndex) => {
+          let chatEl = getChatElement(chat.id);
+          const isNewChat = !chatEl;
+          
+          if (isNewChat) {
+            // Create new chat element
+            chatEl = renderChat(chat);
+            // Insert at correct position
+            const nextChat = currentChats[chatIndex + 1];
+            if (nextChat) {
+              const nextChatEl = getChatElement(nextChat.id);
+              if (nextChatEl && nextChatEl.parentElement === chatsList) {
+                chatsList.insertBefore(chatEl, nextChatEl);
+              } else {
+                chatsList.appendChild(chatEl);
+              }
+            } else {
+              chatsList.appendChild(chatEl);
+            }
+          } else {
+            // Update existing chat element
+            updateChatElement(chatEl, chat);
+          }
+        });
+      }
+    }
   });
 }
 
@@ -934,10 +1339,42 @@ function addChat(folderId) {
     files: [],
     messages: [],
   };
-  setState({
-    chats: [...appState.chats, chat],
-    selectedChatId: chat.id,
-  });
+  
+  // Update state
+  appState.chats = [...appState.chats, chat];
+  appState.selectedChatId = chat.id;
+  saveState(appState);
+  
+  // Add chat element to DOM without full re-render
+  const folderEl = getFolderElement(chat.folderId);
+  if (folderEl) {
+    const chatsList = folderEl.querySelector('.chat-list');
+    if (chatsList) {
+      const chatItem = renderChat(chat);
+      chatsList.appendChild(chatItem);
+      // Ensure folder is expanded
+      const isExpanded = appState.expandedFolders[chat.folderId] !== false;
+      if (!isExpanded) {
+        updateFolderExpandedState(chat.folderId, true);
+        appState.expandedFolders = { ...appState.expandedFolders, [chat.folderId]: true };
+        saveState(appState);
+      }
+      // Update active state
+      updateChatActiveState(chat.id, true);
+    } else {
+      // Folder structure doesn't exist, need full render
+      render();
+      return;
+    }
+  } else {
+    // Folder doesn't exist, need full render
+    render();
+    return;
+  }
+  
+  // Render other parts that might be affected
+  renderMessages();
+  renderFiles();
 }
 
 function removeChat(chatId) {
@@ -967,6 +1404,7 @@ function removeChat(chatId) {
           messages: [],
         };
         openChatMenuId = null;
+        // Need full render for this case
         setState({
           chats: [newChat],
           selectedChatId: newChat.id,
@@ -976,10 +1414,31 @@ function removeChat(chatId) {
         toastMessage('Chat deleted. Created a fresh chat.');
         return;
       }
+      
+      // Remove chat element from DOM
+      const chatEl = getChatElement(chatId);
+      if (chatEl) {
+        chatEl.remove();
+      }
+      
       const newSelected =
         chatId === appState.selectedChatId ? remaining[0].id : appState.selectedChatId;
       openChatMenuId = null;
-      setState({ chats: remaining, selectedChatId: newSelected });
+      
+      // Update state
+      appState.chats = remaining;
+      appState.selectedChatId = newSelected;
+      saveState(appState);
+      
+      // Update active state if needed
+      if (chatId === appState.selectedChatId && newSelected) {
+        updateChatActiveState(newSelected, true);
+      }
+      
+      // Render messages and files for new selected chat
+      renderMessages();
+      renderFiles();
+      
       toastMessage('Chat deleted');
     },
   });
@@ -995,15 +1454,39 @@ function renameChat(chatId) {
     toastMessage('Chat name cannot be empty');
     return;
   }
+  
+  // Update state
   const chats = appState.chats.map((entry) =>
     entry.id === chatId ? { ...entry, name } : entry,
   );
   openChatMenuId = null;
-  setState({ chats, editingChatId: null, editingChatDraft: '' });
+  appState.chats = chats;
+  appState.editingChatId = null;
+  appState.editingChatDraft = '';
+  saveState(appState);
+  
+  // Update chat element in DOM
+  const chatEl = getChatElement(chatId);
+  if (chatEl) {
+    updateChatElement(chatEl, chats.find(c => c.id === chatId));
+  } else {
+    // Element doesn't exist, need full render
+    render();
+  }
 }
 
 function startChatRename(chat) {
-  setState({ editingChatId: chat.id, editingChatDraft: chat.name || '' });
+  appState.editingChatId = chat.id;
+  appState.editingChatDraft = chat.name || '';
+  saveState(appState);
+  
+  // Update chat element to show editing UI
+  const chatEl = getChatElement(chat.id);
+  if (chatEl) {
+    updateChatElement(chatEl, chat);
+  } else {
+    render();
+  }
 }
 
 function submitChatRename(chatId) {
@@ -1011,8 +1494,24 @@ function submitChatRename(chatId) {
 }
 
 function cancelChatRename() {
+  const prevEditingId = appState.editingChatId;
   openChatMenuId = null;
-  setState({ editingChatId: null, editingChatDraft: '' });
+  appState.editingChatId = null;
+  appState.editingChatDraft = '';
+  saveState(appState);
+  
+  // Update chat element to hide editing UI
+  if (prevEditingId) {
+    const chat = appState.chats.find(c => c.id === prevEditingId);
+    if (chat) {
+      const chatEl = getChatElement(prevEditingId);
+      if (chatEl) {
+        updateChatElement(chatEl, chat);
+      } else {
+        render();
+      }
+    }
+  }
 }
 
 function renameFolder(folderId) {
@@ -1025,14 +1524,38 @@ function renameFolder(folderId) {
     toastMessage('Folder name cannot be empty');
     return;
   }
+  
+  // Update state
   const folders = appState.folders.map((entry) =>
     entry.id === folderId ? { ...entry, name } : entry,
   );
-  setState({ folders, editingFolderId: null, editingFolderDraft: '' });
+  appState.folders = folders;
+  appState.editingFolderId = null;
+  appState.editingFolderDraft = '';
+  saveState(appState);
+  
+  // Update folder element in DOM
+  const folderEl = getFolderElement(folderId);
+  if (folderEl) {
+    updateFolderElement(folderEl, folders.find(f => f.id === folderId));
+  } else {
+    // Element doesn't exist, need full render
+    render();
+  }
 }
 
 function startFolderRename(folder) {
-  setState({ editingFolderId: folder.id, editingFolderDraft: folder.name || '' });
+  appState.editingFolderId = folder.id;
+  appState.editingFolderDraft = folder.name || '';
+  saveState(appState);
+  
+  // Update folder element to show editing UI
+  const folderEl = getFolderElement(folder.id);
+  if (folderEl) {
+    updateFolderElement(folderEl, folder);
+  } else {
+    render();
+  }
 }
 
 function submitFolderRename(folderId) {
@@ -1040,7 +1563,23 @@ function submitFolderRename(folderId) {
 }
 
 function cancelFolderRename() {
-  setState({ editingFolderId: null, editingFolderDraft: '' });
+  const prevEditingId = appState.editingFolderId;
+  appState.editingFolderId = null;
+  appState.editingFolderDraft = '';
+  saveState(appState);
+  
+  // Update folder element to hide editing UI
+  if (prevEditingId) {
+    const folder = appState.folders.find(f => f.id === prevEditingId);
+    if (folder) {
+      const folderEl = getFolderElement(prevEditingId);
+      if (folderEl) {
+        updateFolderElement(folderEl, folder);
+      } else {
+        render();
+      }
+    }
+  }
 }
 
 function openNewFolderModal() {
@@ -1058,13 +1597,27 @@ function addFolder() {
     return;
   }
   const folder = { id: uuid(), name };
-  setState({
-    folders: [...appState.folders, folder],
-    selectedFolderId: folder.id,
-    expandedFolders: { ...appState.expandedFolders, [folder.id]: true },
-    newFolderModalOpen: false,
-    newFolderDraft: '',
-  });
+  
+  // Update state
+  appState.folders = [...appState.folders, folder];
+  appState.selectedFolderId = folder.id;
+  appState.expandedFolders = { ...appState.expandedFolders, [folder.id]: true };
+  appState.newFolderModalOpen = false;
+  appState.newFolderDraft = '';
+  saveState(appState);
+  
+  // Add folder element to DOM without full re-render
+  const folderEl = renderFolder(folder);
+  folderList.appendChild(folderEl);
+  
+  // Update active state
+  updateFolderActiveState(folder.id, true);
+  
+  // Close modal
+  const folderOverlay = document.getElementById('folder-overlay');
+  if (folderOverlay) {
+    folderOverlay.classList.remove('show');
+  }
 }
 
 function removeFolder(folderId) {
@@ -1093,6 +1646,13 @@ function removeFolder(folderId) {
     confirmLabel: 'Delete folder',
     confirmVariant: 'danger',
     onConfirm: () => {
+      // Remove folder element from DOM
+      const folderEl = getFolderElement(folderId);
+      if (folderEl) {
+        folderEl.remove();
+      }
+      
+      // Update state
       const folders = appState.folders.filter((entry) => entry.id !== folderId);
       const selectedFolderId =
         appState.selectedFolderId === folderId ? 'root' : appState.selectedFolderId;
@@ -1102,7 +1662,21 @@ function removeFolder(folderId) {
         appState.editingFolderId === folderId
           ? { editingFolderId: null, editingFolderDraft: '' }
           : {};
-      setState({ folders, selectedFolderId, expandedFolders, ...editingFolderState });
+      
+      appState.folders = folders;
+      appState.selectedFolderId = selectedFolderId;
+      appState.expandedFolders = expandedFolders;
+      if (editingFolderState.editingFolderId !== undefined) {
+        appState.editingFolderId = editingFolderState.editingFolderId;
+        appState.editingFolderDraft = editingFolderState.editingFolderDraft || '';
+      }
+      saveState(appState);
+      
+      // Update active state if needed
+      if (appState.selectedFolderId !== folderId) {
+        updateFolderActiveState(selectedFolderId, true);
+      }
+      
       toastMessage('Folder deleted');
     },
   });
@@ -1147,11 +1721,62 @@ function findLastUserIndex(messages) {
 }
 
 function moveChat(chatId, folderId) {
-  const chats = appState.chats.map((chat) =>
-    chat.id === chatId ? { ...chat, folderId } : chat,
+  const chat = appState.chats.find(c => c.id === chatId);
+  if (!chat) return;
+  
+  // Update state
+  const chats = appState.chats.map((c) =>
+    c.id === chatId ? { ...c, folderId } : c,
   );
   openChatMenuId = null;
-  setState({ chats, selectedFolderId: folderId });
+  appState.chats = chats;
+  appState.selectedFolderId = folderId;
+  saveState(appState);
+  
+  // Move chat element in DOM
+  const chatEl = getChatElement(chatId);
+  if (chatEl) {
+    // Remove from old folder
+    chatEl.remove();
+    
+    // Add to new folder
+    const newFolderEl = getFolderElement(folderId);
+    if (newFolderEl) {
+      const chatsList = newFolderEl.querySelector('.chat-list');
+      if (chatsList) {
+        // Update the chat element's move select to reflect new folder
+        const moveSelect = chatEl.querySelector('.move-row select');
+        if (moveSelect) {
+          moveSelect.value = folderId;
+        }
+        
+        chatsList.appendChild(chatEl);
+        
+        // Ensure folder is expanded
+        const isExpanded = appState.expandedFolders[folderId] !== false;
+        if (!isExpanded) {
+          updateFolderExpandedState(folderId, true);
+          appState.expandedFolders = { ...appState.expandedFolders, [folderId]: true };
+          saveState(appState);
+        }
+      } else {
+        // Folder structure doesn't exist, need full render
+        render();
+        return;
+      }
+    } else {
+      // Folder doesn't exist, need full render
+      render();
+      return;
+    }
+  } else {
+    // Chat element doesn't exist, need full render
+    render();
+    return;
+  }
+  
+  // Update folder active state
+  updateFolderActiveState(folderId, true);
 }
 
 async function handleSend() {
@@ -1772,8 +2397,15 @@ document.addEventListener('click', (event) => {
 
   if (openChatMenuId) {
     if (target.closest('.chat-menu') || target.closest('.chat-menu-trigger')) return;
+    // Close menu using granular update
+    const chatEl = getChatElement(openChatMenuId);
+    if (chatEl) {
+      const menu = chatEl.querySelector('.chat-menu');
+      if (menu) {
+        menu.classList.remove('show');
+      }
+    }
     openChatMenuId = null;
-    renderFolders();
   }
 
   const clickedModelField = target.closest('.model-field');
