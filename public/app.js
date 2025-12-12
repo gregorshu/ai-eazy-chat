@@ -534,8 +534,14 @@ function renderMessages() {
       appState.editingMessageChatId === chat.id &&
       appState.editingMessageIndex === index;
 
+    const isStreamingAssistant = msg.role === 'assistant' && msg.streaming;
+
     if (isEditing) {
       div.classList.add('editing');
+    }
+
+    if (isStreamingAssistant) {
+      div.classList.add('streaming');
     }
 
     if (isEditing) {
@@ -575,8 +581,6 @@ function renderMessages() {
       content.className = 'message-content';
       content.textContent = msg.content;
       div.appendChild(content);
-
-      const isStreamingAssistant = msg.role === 'assistant' && msg.streaming;
 
       if (msg.role === 'assistant' && !isStreamingAssistant) {
         const copyActions = document.createElement('div');
