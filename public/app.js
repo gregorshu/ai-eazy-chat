@@ -247,6 +247,58 @@ function setState(update) {
     return; // Early return to avoid unnecessary renders
   }
   
+  // Handle draft state updates (typing in inputs) - no render needed at all
+  const isDraftOnly = (update.newFolderDraft !== undefined || 
+                       update.editingFolderDraft !== undefined ||
+                       update.newPersonaDraft !== undefined ||
+                       update.editingPersonaDraft !== undefined ||
+                       update.editingChatDraft !== undefined ||
+                       update.editingMessageDraft !== undefined) &&
+                      Object.keys(update).every(key => 
+                        key === 'newFolderDraft' || 
+                        key === 'editingFolderDraft' ||
+                        key === 'newPersonaDraft' ||
+                        key === 'editingPersonaDraft' ||
+                        key === 'editingChatDraft' ||
+                        key === 'editingMessageDraft'
+                      );
+  
+  if (isDraftOnly) {
+    // Just save state, no render needed for draft updates
+    return;
+  }
+  
+  // Handle modal open/close - only update modal visibility, no chat re-render
+  const isModalToggle = (update.newFolderModalOpen !== undefined || 
+                          update.newPersonaModalOpen !== undefined) &&
+                         Object.keys(update).every(key => 
+                           key === 'newFolderModalOpen' || 
+                           key === 'newPersonaModalOpen' ||
+                           key === 'newFolderDraft' ||
+                           key === 'newPersonaDraft' ||
+                           key === 'editingPersonaDraft'
+                         );
+  
+  if (isModalToggle) {
+    // Only update modal visibility
+    const folderOverlay = document.getElementById('folder-overlay');
+    const personaModal = document.getElementById('persona-modal');
+    
+    if (update.newFolderModalOpen !== undefined && folderOverlay) {
+      folderOverlay.classList.toggle('show', update.newFolderModalOpen);
+      if (update.newFolderModalOpen && folderNameInput) {
+        folderNameInput.value = update.newFolderDraft || appState.newFolderDraft || '';
+        setTimeout(() => folderNameInput.focus(), 100);
+      }
+    }
+    
+    if (update.newPersonaModalOpen !== undefined && personaModal) {
+      personaModal.classList.toggle('show', update.newPersonaModalOpen);
+    }
+    
+    return; // Early return to avoid unnecessary renders
+  }
+  
   // Handle model-related updates separately (no need for full render)
   const isModelSearchOnly = update.modelSearch !== undefined && 
                             Object.keys(update).length === 1;
@@ -276,8 +328,6 @@ function setState(update) {
     update.chats !== undefined ||
     update.sidebarHidden !== undefined ||
     update.textareaExpanded !== undefined ||
-    update.newFolderModalOpen !== undefined ||
-    update.newPersonaModalOpen !== undefined ||
     (update.settings !== undefined && !isModelSelection && !isModelInputTyping) ||
     update.modelOptions !== undefined;
   
@@ -1461,9 +1511,14 @@ function render() {
     expandTextareaButton.setAttribute('aria-label', appState.textareaExpanded ? 'Collapse message field' : 'Expand message field');
   }
   
+  // Modal visibility is now handled in setState, but keep this for initial render
   const shouldShowFolderModal = appState.newFolderModalOpen;
-  folderOverlay.classList.toggle('show', shouldShowFolderModal);
-  folderNameInput.value = appState.newFolderDraft || '';
+  if (folderOverlay) {
+    folderOverlay.classList.toggle('show', shouldShowFolderModal);
+  }
+  if (folderNameInput) {
+    folderNameInput.value = appState.newFolderDraft || '';
+  }
   if (shouldShowFolderModal && !wasFolderModalOpen) {
     folderNameInput.focus();
   }
@@ -2573,7 +2628,10 @@ if (personaContentInput) {
 }
 
 settingsApiKeyInput.addEventListener('input', (e) => {
-  setState({ settings: { ...appState.settings, apiKey: e.target.value } });
+  // Update API key directly without triggering full render
+  appState.settings.apiKey = e.target.value;
+  saveState(appState);
+  // No render needed - just save the value
 });
 settingsModelInput.addEventListener('input', (e) => {
   const value = e.target.value;
