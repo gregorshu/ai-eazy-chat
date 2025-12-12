@@ -280,11 +280,56 @@ confirmOverlay.addEventListener('click', (event) => {
   }
 });
 
+// Helper to find or create folder element
+function getFolderElement(folderId) {
+  return folderList.querySelector(`[data-folder-id="${folderId}"]`);
+}
+
+// Helper to find or create chat element
+function getChatElement(chatId) {
+  return folderList.querySelector(`[data-chat-id="${chatId}"]`);
+}
+
+// Update a single folder's active state
+function updateFolderActiveState(folderId, isActive) {
+  const folderEl = getFolderElement(folderId);
+  if (folderEl) {
+    const header = folderEl.querySelector('.folder-header');
+    if (header) {
+      header.classList.toggle('active', isActive);
+    }
+  }
+}
+
+// Update a single folder's expanded state
+function updateFolderExpandedState(folderId, isExpanded) {
+  const folderEl = getFolderElement(folderId);
+  if (folderEl) {
+    const toggle = folderEl.querySelector('.folder-toggle');
+    const chatsList = folderEl.querySelector('.chat-list');
+    if (toggle) {
+      toggle.textContent = isExpanded ? '▾' : '▸';
+    }
+    if (chatsList) {
+      chatsList.style.display = isExpanded ? 'flex' : 'none';
+    }
+  }
+}
+
+// Update a single chat's active state
+function updateChatActiveState(chatId, isActive) {
+  const chatEl = getChatElement(chatId);
+  if (chatEl) {
+    chatEl.classList.toggle('active', isActive);
+  }
+}
+
 function renderFolders() {
   folderList.innerHTML = '';
   appState.folders.forEach((folder) => {
     const li = document.createElement('li');
     li.className = 'folder-item';
+    li.setAttribute('data-folder-id', folder.id);
 
     const header = document.createElement('div');
     header.className = 'folder-header';
@@ -403,6 +448,7 @@ function renderFolders() {
     chats.forEach((chat) => {
       const chatItem = document.createElement('li');
       chatItem.className = chat.id === appState.selectedChatId ? 'active chat-row' : 'chat-row';
+      chatItem.setAttribute('data-chat-id', chat.id);
       chatItem.onclick = () => setState({ selectedChatId: chat.id });
 
       const info = document.createElement('div');
@@ -416,7 +462,8 @@ function renderFolders() {
       menuButton.textContent = '⋯';
       menuButton.onclick = (e) => {
         e.stopPropagation();
-        openChatMenuId = openChatMenuId === chat.id ? null : chat.id;
+        const wasOpen = openChatMenuId === chat.id;
+        openChatMenuId = wasOpen ? null : chat.id;
         renderFolders();
       };
 
@@ -510,16 +557,16 @@ function renderFolders() {
       menu.appendChild(deleteBtn);
       menu.appendChild(moveWrap);
 
-        chatItem.appendChild(info);
-        chatItem.appendChild(menuButton);
-        chatItem.appendChild(menu);
-        chatsList.appendChild(chatItem);
-      });
-
-      li.appendChild(chatsList);
-      folderList.appendChild(li);
+      chatItem.appendChild(info);
+      chatItem.appendChild(menuButton);
+      chatItem.appendChild(menu);
+      chatsList.appendChild(chatItem);
     });
-  }
+
+    li.appendChild(chatsList);
+    folderList.appendChild(li);
+  });
+}
 
 let lastRenderedChatId = null;
 let lastRenderedMessageCount = 0;
