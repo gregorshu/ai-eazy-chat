@@ -1192,7 +1192,8 @@ textarea::placeholder {
 
 .model-dropdown {
   display: none;
-  background: var(--glass-bg-strong);
+  /* Much higher opacity for better visibility */
+  background: rgba(20, 25, 35, 0.95);
   backdrop-filter: var(--backdrop-blur-strong);
   -webkit-backdrop-filter: var(--backdrop-blur-strong);
   border: 1px solid var(--glass-border-light);
@@ -1206,6 +1207,10 @@ textarea::placeholder {
   z-index: 5;
   /* Performance optimization */
   will-change: transform, opacity;
+}
+
+.theme-light .model-dropdown {
+  background: rgba(255, 255, 255, 0.95);
 }
 
 .model-dropdown.show {
@@ -1234,21 +1239,28 @@ textarea::placeholder {
   text-align: left;
   border-radius: 10px;
   padding: 10px 12px;
-  background: var(--glass-bg);
-  backdrop-filter: var(--backdrop-blur-light);
-  -webkit-backdrop-filter: var(--backdrop-blur-light);
-  border: 1px solid var(--glass-border);
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--text);
   cursor: pointer;
   /* Optimized: minimal transition */
-  transition: transform var(--transition-fast);
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.theme-light .model-option {
+  background: transparent;
 }
 
 .model-option:hover,
 .model-option:focus-visible {
-  background: var(--glass-bg-light);
+  background: rgba(255, 255, 255, 0.1);
   border-color: var(--accent);
   box-shadow: var(--glass-shadow);
+}
+
+.theme-light .model-option:hover,
+.theme-light .model-option:focus-visible {
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .model-empty {

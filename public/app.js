@@ -241,6 +241,35 @@ function setState(update) {
     applyTheme(update.theme);
   }
   
+  // Handle settings tab changes separately (no need for full render)
+  if (update.activeSettingsTab !== undefined) {
+    renderSettingsTabs();
+    return; // Early return to avoid unnecessary renders
+  }
+  
+  // Handle model-related updates separately (no need for full render)
+  const isModelSearchOnly = update.modelSearch !== undefined && 
+                            Object.keys(update).length === 1;
+  const isModelDropdownToggle = update.modelDropdownOpen !== undefined && 
+                                Object.keys(update).length === 1;
+  const isModelSelection = update.settings !== undefined && 
+                            update.settings.model !== undefined && 
+                            update.modelDropdownOpen === false;
+  // Handle typing in model input (updates both settings.model and modelSearch)
+  const isModelInputTyping = update.settings !== undefined && 
+                             update.settings.model !== undefined && 
+                             update.modelSearch !== undefined &&
+                             update.modelDropdownOpen === undefined;
+  
+  if (isModelSearchOnly || isModelDropdownToggle || isModelSelection || isModelInputTyping) {
+    // Only update model dropdown UI, no full render
+    if (isModelSelection && settingsModelInput) {
+      settingsModelInput.value = update.settings.model;
+    }
+    renderModelOptions();
+    return; // Early return to avoid unnecessary renders
+  }
+  
   // Determine if we need full render or can use granular updates
   const needsFullRender = 
     update.folders !== undefined ||
@@ -249,10 +278,8 @@ function setState(update) {
     update.textareaExpanded !== undefined ||
     update.newFolderModalOpen !== undefined ||
     update.newPersonaModalOpen !== undefined ||
-    update.settings !== undefined ||
-    update.modelOptions !== undefined ||
-    update.modelDropdownOpen !== undefined ||
-    update.activeSettingsTab !== undefined;
+    (update.settings !== undefined && !isModelSelection && !isModelInputTyping) ||
+    update.modelOptions !== undefined;
   
   if (needsFullRender) {
     render();
@@ -264,6 +291,34 @@ function setState(update) {
     renderFiles();
     renderModelOptions();
     renderPersonas();
+  }
+}
+
+// Render only the settings tabs UI (no chat re-render)
+function renderSettingsTabs() {
+  const activeTab = appState.activeSettingsTab || 'model';
+  if (tabModelButton) {
+    tabModelButton.classList.toggle('active', activeTab === 'model');
+  }
+  if (tabPersonaButton) {
+    tabPersonaButton.classList.toggle('active', activeTab === 'persona');
+  }
+  if (tabThemeButton) {
+    tabThemeButton.classList.toggle('active', activeTab === 'theme');
+  }
+  if (tabPanelModel) {
+    tabPanelModel.classList.toggle('active', activeTab === 'model');
+  }
+  if (tabPanelPersona) {
+    tabPanelPersona.classList.toggle('active', activeTab === 'persona');
+  }
+  if (tabPanelTheme) {
+    tabPanelTheme.classList.toggle('active', activeTab === 'theme');
+  }
+  
+  // Update theme controls if on theme tab
+  if (activeTab === 'theme') {
+    renderThemeSettings();
   }
 }
 
@@ -1318,6 +1373,7 @@ function getFilteredModels() {
 
 function selectModel(model) {
   const value = model || 'openrouter/auto';
+  // Use setState - will be handled as model selection (no full render)
   setState({
     settings: { ...appState.settings, model: value },
     modelDropdownOpen: false,
@@ -1356,6 +1412,8 @@ function renderModelOptions() {
 
   if (modelToggleButton) {
     modelToggleButton.setAttribute('aria-expanded', appState.modelDropdownOpen ? 'true' : 'false');
+    // Update toggle button icon based on state
+    modelToggleButton.textContent = appState.modelDropdownOpen ? '▴' : '▾';
   }
 
   if (modelSearchInput) {
@@ -1389,29 +1447,8 @@ function render() {
   settingsModelInput.value = appState.settings.model || 'openrouter/auto';
   settingsApiKeyInput.value = appState.settings.apiKey || '';
   
-  // Update tabs
-  const activeTab = appState.activeSettingsTab || 'model';
-  if (tabModelButton) {
-    tabModelButton.classList.toggle('active', activeTab === 'model');
-  }
-  if (tabPersonaButton) {
-    tabPersonaButton.classList.toggle('active', activeTab === 'persona');
-  }
-  if (tabThemeButton) {
-    tabThemeButton.classList.toggle('active', activeTab === 'theme');
-  }
-  if (tabPanelModel) {
-    tabPanelModel.classList.toggle('active', activeTab === 'model');
-  }
-  if (tabPanelPersona) {
-    tabPanelPersona.classList.toggle('active', activeTab === 'persona');
-  }
-  if (tabPanelTheme) {
-    tabPanelTheme.classList.toggle('active', activeTab === 'theme');
-  }
-  
-  // Update theme controls
-  renderThemeSettings();
+  // Update tabs (only when full render is needed)
+  renderSettingsTabs();
   
   // Update textarea expand state
   if (textareaWrapper) {
@@ -2540,22 +2577,19 @@ settingsApiKeyInput.addEventListener('input', (e) => {
 });
 settingsModelInput.addEventListener('input', (e) => {
   const value = e.target.value;
+  // Use setState but it will be handled as model search only
   setState({
     settings: { ...appState.settings, model: value || 'openrouter/auto' },
     modelSearch: value,
-    modelDropdownOpen: true,
   });
 });
 
-settingsModelInput.addEventListener('focus', () => {
-  if (!appState.modelDropdownOpen) {
-    setState({ modelDropdownOpen: true });
-  }
-});
+// Removed auto-open on focus - dropdown only opens via toggle button
 
 if (modelSearchInput) {
   modelSearchInput.addEventListener('input', (e) => {
-    setState({ modelSearch: e.target.value, modelDropdownOpen: true });
+    // Use setState - will be handled as model search only
+    setState({ modelSearch: e.target.value });
   });
 }
 
