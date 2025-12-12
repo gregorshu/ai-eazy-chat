@@ -1,4 +1,5 @@
 :root {
+  /* Theme colors - will be set by JavaScript */
   --bg: #050910;
   --panel: #0c1220;
   --card: #111827;
@@ -7,20 +8,51 @@
   --accent: #10a37f;
   --danger: #f87171;
   --border: #1f2937;
-  --shadow: 0 16px 50px rgba(0, 0, 0, 0.45);
-  --glow: 0 0 0 1px rgba(16, 163, 127, 0.25), 0 12px 40px rgba(0, 0, 0, 0.35);
+  
+  /* Glassmorphism variables - more transparent and glassy */
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-bg-light: rgba(255, 255, 255, 0.06);
+  --glass-bg-strong: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-light: rgba(255, 255, 255, 0.12);
+  --backdrop-blur: blur(24px);
+  --backdrop-blur-light: blur(16px);
+  --backdrop-blur-strong: blur(32px);
+  
+  /* Shadows - reduced intensity for less bright appearance */
+  --shadow: 0 16px 50px rgba(0, 0, 0, 0.35);
+  --glow: 0 0 0 1px rgba(16, 163, 127, 0.2), 0 12px 40px rgba(0, 0, 0, 0.25);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  
+  /* Layout */
   --sidebar-width: 300px;
   --sidebar-collapsed-width: 54px;
+  
+  /* Transitions */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+  
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: var(--text);
+}
+
+/* Light theme glassmorphism adjustments - less bright */
+.theme-light {
+  --glass-bg: rgba(255, 255, 255, 0.25);
+  --glass-bg-light: rgba(255, 255, 255, 0.35);
+  --glass-bg-strong: rgba(255, 255, 255, 0.45);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --glass-border-light: rgba(255, 255, 255, 0.4);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.03);
 }
 
 * {
   box-sizing: border-box;
 }
+
+/* Optimized transitions - only on specific properties, not global */
+/* Removed global transitions to improve performance */
 
 @keyframes fadeIn {
   from {
@@ -87,12 +119,30 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at 8% 20%, rgba(16, 163, 127, 0.12), transparent 24%),
-    radial-gradient(circle at 90% 10%, rgba(79, 70, 229, 0.12), transparent 26%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   overflow: hidden;
   animation: fadeIn var(--transition-base);
+  /* Only transition essential properties for performance */
+  transition: background-color var(--transition-base);
+  position: relative;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: 
+    radial-gradient(circle at 8% 20%, rgba(var(--accent-rgb, 16, 163, 127), 0.12), transparent 24%),
+    radial-gradient(circle at 90% 10%, rgba(79, 70, 229, 0.12), transparent 26%);
+  pointer-events: none;
+  z-index: 0;
+  transition: opacity var(--transition-base);
+}
+
+body > * {
+  position: relative;
+  z-index: 1;
 }
 
 .app-shell {
@@ -107,8 +157,10 @@ body {
 }
 
 .sidebar {
-  background: linear-gradient(180deg, #080d19 0%, #0b1222 100%);
-  border-right: 1px solid #111827;
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
+  border-right: 1px solid var(--glass-border);
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -117,7 +169,11 @@ body {
   height: 100%;
   max-height: 100vh;
   overflow: hidden;
-  transition: padding var(--transition-base);
+  /* Optimized: only transition transform and opacity (GPU accelerated) */
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
+  box-shadow: var(--glass-shadow);
+  /* Performance optimization */
+  will-change: transform;
 }
 
 .sidebar-content {
@@ -138,8 +194,11 @@ body {
   border-radius: 10px;
   width: 40px;
   height: 40px;
-  backdrop-filter: blur(8px);
-  box-shadow: var(--glow);
+  background: var(--glass-bg-light);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
   transition: all var(--transition-fast);
 }
 
@@ -205,10 +264,10 @@ body {
   display: grid;
   place-items: center;
   border-radius: 10px;
-  background: linear-gradient(135deg, #10a37f, #3b82f6);
+  background: linear-gradient(135deg, var(--accent), hsl(calc(var(--theme-hue, 160) + 60), 70%, 50%));
   box-shadow: var(--glow);
   font-size: 18px;
-  transition: transform var(--transition-fast);
+  transition: transform var(--transition-fast), background var(--transition-base);
 }
 
 .logo:hover {
@@ -251,14 +310,17 @@ body {
 .chat-row {
   padding: 8px 10px;
   border-radius: 8px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   position: relative;
-  transition: all var(--transition-fast);
+  /* Optimized: only GPU-accelerated properties */
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
   cursor: pointer;
   animation: slideIn var(--transition-base);
   z-index: 1;
@@ -270,8 +332,9 @@ body {
 }
 
 .chat-row:hover {
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(16, 163, 127, 0.3);
+  background: var(--glass-bg-light);
+  border-color: var(--glass-border-light);
+  /* GPU-accelerated transform */
   transform: translateX(2px);
 }
 
@@ -281,8 +344,10 @@ body {
 
 .chat-row.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2);
-  background: linear-gradient(135deg, rgba(16, 163, 127, 0.08), var(--panel));
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 16, 163, 127), 0.25), 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: var(--glass-bg-light);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
 }
 
 .chat-row-main {
@@ -335,7 +400,8 @@ body {
   z-index: 1002;
   min-width: 160px;
   animation: scaleIn var(--transition-fast);
-  backdrop-filter: blur(12px);
+  backdrop-filter: var(--backdrop-blur-strong);
+  -webkit-backdrop-filter: var(--backdrop-blur-strong);
   isolation: isolate;
 }
 
@@ -405,17 +471,21 @@ body {
 }
 
 .folder-item {
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
   border-radius: 8px;
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  transition: all var(--transition-fast);
+  /* Optimized transitions */
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
   animation: slideIn var(--transition-base);
   position: relative;
   z-index: 1;
+  box-shadow: var(--glass-shadow);
 }
 
 .folder-item:has(.chat-menu.show) {
@@ -423,8 +493,8 @@ body {
 }
 
 .folder-item:hover {
-  border-color: rgba(16, 163, 127, 0.3);
-  background: rgba(255, 255, 255, 0.02);
+  border-color: var(--glass-border-light);
+  background: var(--glass-bg-light);
 }
 
 .folder-header {
@@ -482,13 +552,16 @@ body {
 }
 
 button {
-  border: 1px solid var(--border);
-  background: var(--card);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
   color: var(--text);
   border-radius: 8px;
   padding: 8px 12px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  /* Optimized: only transform and opacity */
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
   font-weight: 500;
   font-size: 13px;
   position: relative;
@@ -514,8 +587,10 @@ button:hover::before {
 }
 
 button:hover {
-  border-color: rgba(16, 163, 127, 0.6);
-  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2);
+  background: var(--glass-bg-light);
+  border-color: var(--glass-border-light);
+  box-shadow: var(--glass-shadow);
+  /* GPU-accelerated */
   transform: translateY(-1px);
 }
 
@@ -524,15 +599,17 @@ button:active {
 }
 
 button.primary {
-  background: linear-gradient(135deg, #10a37f, #22c55e);
+  background: var(--accent);
   border: none;
-  color: #04140e;
-  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.3), 0 4px 12px rgba(16, 163, 127, 0.2);
+  color: var(--bg);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 16, 163, 127), 0.3), 0 4px 12px rgba(var(--accent-rgb, 16, 163, 127), 0.2);
   font-weight: 600;
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
 }
 
 button.primary:hover {
-  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.4), 0 6px 16px rgba(16, 163, 127, 0.3);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 16, 163, 127), 0.4), 0 6px 16px rgba(var(--accent-rgb, 16, 163, 127), 0.3);
   transform: translateY(-1px);
   filter: brightness(1.05);
 }
@@ -542,9 +619,11 @@ button.primary:active {
 }
 
 button.primary.danger {
-  background: linear-gradient(135deg, #dc2626, #f97316);
-  color: #0f172a;
+  background: var(--danger);
+  color: var(--bg);
   box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.3), 0 4px 12px rgba(220, 38, 38, 0.25);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
 }
 
 button.primary.danger:hover {
@@ -554,10 +633,14 @@ button.primary.danger:hover {
 
 button.ghost {
   background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 button.ghost:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
 }
 
 button.danger {
@@ -629,13 +712,13 @@ button.danger {
 }
 
 .workspace {
-  background: radial-gradient(circle at 20% 20%, rgba(16, 163, 127, 0.08), transparent 32%),
-    linear-gradient(180deg, #0b1020 0%, #070b15 100%);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
   min-height: 0;
+  /* Removed transition for performance */
 }
 
 .workspace-header {
@@ -695,20 +778,24 @@ select:focus-visible {
 .select-input,
 textarea {
   width: 100%;
-  background: var(--card);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
   border-radius: 8px;
   color: var(--text);
   padding: 8px 12px;
   font-size: 13px;
-  transition: all var(--transition-fast);
+  /* Optimized: only border and box-shadow */
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .text-input:focus,
 .select-input:focus,
 textarea:focus {
-  border-color: rgba(16, 163, 127, 0.5);
-  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.1);
+  background: var(--glass-bg-light);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 16, 163, 127), 0.1), var(--glass-shadow);
   outline: none;
 }
 
@@ -723,9 +810,11 @@ textarea::placeholder {
 
 .attachments {
   padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(15, 23, 42, 0.3);
-  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  /* Removed transition for performance */
 }
 
 .attachment-header {
@@ -737,17 +826,20 @@ textarea::placeholder {
 
 .file-label {
   padding: 6px 12px;
-  background: var(--card);
-  border: 1px dashed rgba(16, 163, 127, 0.5);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px dashed var(--accent);
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
-  transition: all var(--transition-fast);
+  /* Optimized: only transform */
+  transition: transform var(--transition-fast);
 }
 
 .file-label:hover {
-  border-color: rgba(16, 163, 127, 0.7);
-  background: rgba(16, 163, 127, 0.08);
+  background: var(--glass-bg-light);
+  border-color: var(--accent);
   transform: translateY(-1px);
 }
 
@@ -763,20 +855,23 @@ textarea::placeholder {
 .pill {
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(16, 163, 127, 0.12);
-  border: 1px solid rgba(16, 163, 127, 0.45);
-  color: #a7f3d0;
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--accent);
+  color: var(--accent);
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  transition: all var(--transition-fast);
+  /* Optimized: only transform */
+  transition: transform var(--transition-fast);
   animation: scaleIn var(--transition-fast);
 }
 
 .pill:hover {
-  background: rgba(16, 163, 127, 0.18);
-  border-color: rgba(16, 163, 127, 0.6);
+  background: var(--glass-bg-light);
+  border-color: var(--accent);
   transform: scale(1.05);
 }
 
@@ -823,20 +918,23 @@ textarea::placeholder {
 .message { 
   padding: 12px 14px;
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.01) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
   max-width: 900px;
   white-space: pre-wrap;
   line-height: 1.6;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--glass-shadow);
   animation: fadeIn var(--transition-base);
-  transition: all var(--transition-fast);
+  /* Optimized: minimal transitions */
+  transition: transform var(--transition-fast);
   position: relative;
 }
 
 .message:hover {
-  border-color: rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-color: var(--glass-border-light);
+  box-shadow: var(--glass-shadow), 0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
 .message.editing {
@@ -845,8 +943,10 @@ textarea::placeholder {
 
 .message.user {
   align-self: flex-end;
-  background: linear-gradient(135deg, rgba(16, 163, 127, 0.18), rgba(34, 197, 94, 0.16));
-  border-color: rgba(16, 163, 127, 0.45);
+  background: var(--glass-bg-light);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
+  border-color: var(--accent);
   animation: slideInRight var(--transition-base);
 }
 
@@ -951,14 +1051,16 @@ textarea::placeholder {
 
 .composer {
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: rgba(15, 23, 42, 0.95);
-  backdrop-filter: blur(12px);
+  background: var(--glass-bg-strong);
+  backdrop-filter: var(--backdrop-blur-strong);
+  -webkit-backdrop-filter: var(--backdrop-blur-strong);
   flex-shrink: 0;
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+  /* Removed transition for performance */
 }
 
 .composer-controls {
@@ -1090,16 +1192,20 @@ textarea::placeholder {
 
 .model-dropdown {
   display: none;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  backdrop-filter: var(--backdrop-blur-strong);
+  -webkit-backdrop-filter: var(--backdrop-blur-strong);
+  border: 1px solid var(--glass-border-light);
   border-radius: 12px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--glass-shadow), var(--shadow);
   padding: 10px;
   position: absolute;
   top: 100%;
   left: 0;
   right: 0;
   z-index: 5;
+  /* Performance optimization */
+  will-change: transform, opacity;
 }
 
 .model-dropdown.show {
@@ -1128,16 +1234,21 @@ textarea::placeholder {
   text-align: left;
   border-radius: 10px;
   padding: 10px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
   color: var(--text);
   cursor: pointer;
+  /* Optimized: minimal transition */
+  transition: transform var(--transition-fast);
 }
 
 .model-option:hover,
 .model-option:focus-visible {
+  background: var(--glass-bg-light);
   border-color: var(--accent);
-  box-shadow: var(--glow);
+  box-shadow: var(--glass-shadow);
 }
 
 .model-empty {
@@ -1150,17 +1261,20 @@ textarea::placeholder {
   right: 16px;
   bottom: 16px;
   padding: 10px 14px;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  backdrop-filter: var(--backdrop-blur-strong);
+  -webkit-backdrop-filter: var(--backdrop-blur-strong);
+  border: 1px solid var(--glass-border-light);
   border-radius: 8px;
   opacity: 0;
   transform: translateY(20px) scale(0.95);
-  transition: all var(--transition-base);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(12px);
+  /* Optimized: only transform and opacity (GPU accelerated) */
+  transition: transform var(--transition-base), opacity var(--transition-base);
+  box-shadow: var(--glass-shadow), 0 8px 32px rgba(0, 0, 0, 0.25);
   z-index: 10001;
   font-size: 13px;
   pointer-events: none;
+  will-change: transform, opacity;
 }
 
 .toast.show {
@@ -1190,18 +1304,21 @@ textarea::placeholder {
 
 .modal {
   width: min(640px, 100%);
-  background: linear-gradient(160deg, #0f172a, #0b1222);
-  border: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  backdrop-filter: var(--backdrop-blur-strong);
+  -webkit-backdrop-filter: var(--backdrop-blur-strong);
+  border: 1px solid var(--glass-border-light);
   border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow: var(--glass-shadow), 0 20px 60px rgba(0, 0, 0, 0.3);
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   animation: scaleIn var(--transition-base);
-  backdrop-filter: blur(16px);
   max-height: 90vh;
   overflow-y: auto;
+  /* Performance: use transform for animations */
+  will-change: transform, opacity;
 }
 
 .modal-header {
@@ -1293,6 +1410,139 @@ textarea::placeholder {
   gap: 12px;
 }
 
+/* Theme controls */
+.theme-mode-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-mode-button {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.theme-mode-button.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.theme-hue-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-hue-control input[type="range"] {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(to right, 
+    hsl(0, 70%, 50%), 
+    hsl(60, 70%, 50%), 
+    hsl(120, 70%, 50%), 
+    hsl(180, 70%, 50%), 
+    hsl(240, 70%, 50%), 
+    hsl(300, 70%, 50%), 
+    hsl(360, 70%, 50%));
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.theme-hue-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--text);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.theme-hue-control input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--text);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.theme-hue-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+}
+
+.theme-hue-indicator {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--accent);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+.theme-hue-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.theme-preview {
+  margin-top: 8px;
+}
+
+.theme-preview-card {
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: var(--glass-shadow);
+}
+
+.theme-preview-header {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.theme-preview-content {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.theme-preview-button {
+  padding: 6px 12px;
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.theme-preview-text {
+  font-size: 13px;
+  color: var(--text);
+}
+
 .personas-header {
   display: flex;
   justify-content: space-between;
@@ -1310,15 +1560,19 @@ textarea::placeholder {
 }
 
 .persona-item {
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur-light);
+  -webkit-backdrop-filter: var(--backdrop-blur-light);
+  border: 1px solid var(--glass-border);
   border-radius: 8px;
   padding: 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  transition: all var(--transition-fast);
+  /* Optimized transitions */
+  transition: transform var(--transition-fast);
   animation: slideIn var(--transition-base);
+  box-shadow: var(--glass-shadow);
 }
 
 .persona-item:hover {
@@ -1329,8 +1583,10 @@ textarea::placeholder {
 
 .persona-item.active {
   border-color: var(--accent);
-  background: linear-gradient(135deg, rgba(16, 163, 127, 0.12), var(--card));
-  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.2), 0 2px 8px rgba(0, 0, 0, 0.15);
+  background: var(--glass-bg-light);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 16, 163, 127), 0.2), var(--glass-shadow);
 }
 
 .persona-header {

@@ -25,8 +25,15 @@ const settingsModelInput = document.getElementById('settings-model');
 const settingsApiKeyInput = document.getElementById('settings-api-key');
 const tabModelButton = document.getElementById('tab-model');
 const tabPersonaButton = document.getElementById('tab-persona');
+const tabThemeButton = document.getElementById('tab-theme');
 const tabPanelModel = document.getElementById('tab-panel-model');
 const tabPanelPersona = document.getElementById('tab-panel-persona');
+const tabPanelTheme = document.getElementById('tab-panel-theme');
+const themeModeDarkButton = document.getElementById('theme-mode-dark');
+const themeModeLightButton = document.getElementById('theme-mode-light');
+const themeHueInput = document.getElementById('theme-hue');
+const themeHueValue = document.querySelector('.theme-hue-value');
+const themeHueIndicator = document.querySelector('.theme-hue-indicator');
 const personasList = document.getElementById('personas-list');
 const addPersonaButton = document.getElementById('add-persona-button');
 const personaModal = document.getElementById('persona-modal');
@@ -132,6 +139,7 @@ const defaultState = () => {
     modelDropdownOpen: false,
     modelSearch: '',
     activeSettingsTab: 'model',
+    theme: { mode: 'dark', hue: 160 },
   };
 };
 
@@ -202,6 +210,7 @@ let appState = storedState
       modelSearch: storedState.modelSearch || '',
       activeSettingsTab: storedState.activeSettingsTab || 'model',
       settings: { ...baseDefaults.settings, ...fallbackSettings, activePersonaId: activePersonaId },
+      theme: storedState.theme || baseDefaults.theme,
     }
   : baseDefaults;
 
@@ -226,6 +235,11 @@ function setState(update) {
   prevState = { ...appState };
   appState = { ...appState, ...update };
   saveState(appState);
+  
+  // Handle theme changes
+  if (update.theme !== undefined) {
+    applyTheme(update.theme);
+  }
   
   // Determine if we need full render or can use granular updates
   const needsFullRender = 
@@ -344,6 +358,90 @@ function getSelectedChat() {
 function getActivePersona() {
   const activePersona = appState.personas.find((p) => p.id === appState.settings.activePersonaId);
   return activePersona ? activePersona.content : '';
+}
+
+// Theme utility functions
+function getThemeColors(mode, hue) {
+  const isLight = mode === 'light';
+  
+  // Reduced brightness for less bright, more glassy appearance
+  const bgLightness = isLight ? 88 : 4;
+  const panelLightness = isLight ? 82 : 10;
+  const cardLightness = isLight ? 78 : 15;
+  const textLightness = isLight ? 25 : 88;
+  const mutedLightness = isLight ? 45 : 55;
+  const borderLightness = isLight ? 70 : 25;
+  
+  return {
+    bg: `hsl(${hue}, ${isLight ? 12 : 18}%, ${bgLightness}%)`,
+    panel: `hsl(${hue}, ${isLight ? 8 : 12}%, ${panelLightness}%)`,
+    card: `hsl(${hue}, ${isLight ? 6 : 10}%, ${cardLightness}%)`,
+    text: `hsl(${hue}, ${isLight ? 4 : 8}%, ${textLightness}%)`,
+    muted: `hsl(${hue}, ${isLight ? 8 : 12}%, ${mutedLightness}%)`,
+    border: `hsl(${hue}, ${isLight ? 12 : 18}%, ${borderLightness}%)`,
+    accent: `hsl(${hue}, ${isLight ? 55 : 65}%, ${isLight ? 42 : 48}%)`,
+    danger: `hsl(${isLight ? 0 : 5}, ${isLight ? 65 : 70}%, ${isLight ? 52 : 58}%)`,
+  };
+}
+
+// Convert HSL to RGB for rgba() usage
+function hslToRgb(h, s, l) {
+  h /= 360;
+  s /= 100;
+  l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => {
+    const k = (n + h * 12) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color);
+  };
+  return [f(0), f(8), f(4)];
+}
+
+function applyTheme(theme) {
+  const colors = getThemeColors(theme.mode, theme.hue);
+  const root = document.documentElement;
+  
+  // Convert accent HSL to RGB for rgba() usage
+  const isLight = theme.mode === 'light';
+  const accentH = theme.hue;
+  const accentS = isLight ? 60 : 70;
+  const accentL = isLight ? 45 : 50;
+  const [r, g, b] = hslToRgb(accentH, accentS, accentL);
+  
+  // Apply color variables
+  root.style.setProperty('--bg', colors.bg);
+  root.style.setProperty('--panel', colors.panel);
+  root.style.setProperty('--card', colors.card);
+  root.style.setProperty('--text', colors.text);
+  root.style.setProperty('--muted', colors.muted);
+  root.style.setProperty('--border', colors.border);
+  root.style.setProperty('--accent', colors.accent);
+  root.style.setProperty('--danger', colors.danger);
+  root.style.setProperty('--theme-hue', theme.hue);
+  root.style.setProperty('--accent-rgb', `${r}, ${g}, ${b}`);
+  
+  // Apply theme class to body
+  document.body.classList.toggle('theme-light', theme.mode === 'light');
+  document.body.classList.toggle('theme-dark', theme.mode === 'dark');
+  
+  // Update body background gradient with theme hue
+  const bgGradient = document.body.querySelector('::before') || document.createElement('style');
+  if (!document.getElementById('theme-gradient-style')) {
+    const style = document.createElement('style');
+    style.id = 'theme-gradient-style';
+    document.head.appendChild(style);
+  }
+  const styleEl = document.getElementById('theme-gradient-style');
+  if (styleEl) {
+    styleEl.textContent = `
+      body::before {
+        background: 
+          radial-gradient(circle at 8% 20%, hsla(${theme.hue}, 70%, 50%, 0.12), transparent 24%),
+          radial-gradient(circle at 90% 10%, hsla(${theme.hue + 60}, 70%, 50%, 0.12), transparent 26%);
+      }
+    `;
+  }
 }
 
 function toastMessage(message, timeout = 2200) {
@@ -1299,12 +1397,21 @@ function render() {
   if (tabPersonaButton) {
     tabPersonaButton.classList.toggle('active', activeTab === 'persona');
   }
+  if (tabThemeButton) {
+    tabThemeButton.classList.toggle('active', activeTab === 'theme');
+  }
   if (tabPanelModel) {
     tabPanelModel.classList.toggle('active', activeTab === 'model');
   }
   if (tabPanelPersona) {
     tabPanelPersona.classList.toggle('active', activeTab === 'persona');
   }
+  if (tabPanelTheme) {
+    tabPanelTheme.classList.toggle('active', activeTab === 'theme');
+  }
+  
+  // Update theme controls
+  renderThemeSettings();
   
   // Update textarea expand state
   if (textareaWrapper) {
@@ -2306,6 +2413,72 @@ if (tabPersonaButton) {
   tabPersonaButton.addEventListener('click', () => switchSettingsTab('persona'));
 }
 
+if (tabThemeButton) {
+  tabThemeButton.addEventListener('click', () => switchSettingsTab('theme'));
+}
+
+function renderThemeSettings() {
+  if (!appState.theme) return;
+  
+  // Update mode buttons
+  if (themeModeDarkButton && themeModeLightButton) {
+    themeModeDarkButton.classList.toggle('active', appState.theme.mode === 'dark');
+    themeModeLightButton.classList.toggle('active', appState.theme.mode === 'light');
+  }
+  
+  // Update hue slider
+  if (themeHueInput) {
+    themeHueInput.value = appState.theme.hue;
+  }
+  
+  // Update hue value display
+  if (themeHueValue) {
+    themeHueValue.textContent = `${appState.theme.hue}°`;
+  }
+  
+  // Update hue indicator color
+  if (themeHueIndicator) {
+    const colors = getThemeColors(appState.theme.mode, appState.theme.hue);
+    themeHueIndicator.style.background = colors.accent;
+  }
+}
+
+function updateThemeMode(mode) {
+  setState({ theme: { ...appState.theme, mode } });
+  renderThemeSettings();
+}
+
+function updateThemeHue(hue) {
+  setState({ theme: { ...appState.theme, hue: parseInt(hue, 10) } });
+  renderThemeSettings();
+}
+
+if (themeModeDarkButton) {
+  themeModeDarkButton.addEventListener('click', () => updateThemeMode('dark'));
+}
+
+if (themeModeLightButton) {
+  themeModeLightButton.addEventListener('click', () => updateThemeMode('light'));
+}
+
+if (themeHueInput) {
+  themeHueInput.addEventListener('input', (e) => {
+    const hue = parseInt(e.target.value, 10);
+    // Update preview immediately
+    if (themeHueValue) {
+      themeHueValue.textContent = `${hue}°`;
+    }
+    if (themeHueIndicator) {
+      const isLight = appState.theme.mode === 'light';
+      const accentS = isLight ? 60 : 70;
+      const accentL = isLight ? 45 : 50;
+      themeHueIndicator.style.background = `hsl(${hue}, ${accentS}%, ${accentL}%)`;
+    }
+    // Update theme
+    updateThemeHue(hue);
+  });
+}
+
 if (addPersonaButton) {
   addPersonaButton.addEventListener('click', startPersonaCreate);
 }
@@ -2427,6 +2600,9 @@ function checkScreenWidth() {
 // Check on load and resize
 checkScreenWidth();
 window.addEventListener('resize', checkScreenWidth);
+
+// Apply initial theme
+applyTheme(appState.theme);
 
 render();
 refreshModelOptions();

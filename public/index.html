@@ -99,6 +99,7 @@
           <div class="tabs">
             <button id="tab-model" class="tab-button active" data-tab="model">Model & API Key</button>
             <button id="tab-persona" class="tab-button" data-tab="persona">Persona</button>
+            <button id="tab-theme" class="tab-button" data-tab="theme">Theme</button>
           </div>
           <div id="tab-panel-model" class="tab-panel active">
             <label class="stack" for="settings-model">
@@ -153,6 +154,34 @@
               <button id="add-persona-button" class="primary" type="button">+ Add Persona</button>
             </div>
             <ul id="personas-list" class="personas-list"></ul>
+          </div>
+          <div id="tab-panel-theme" class="tab-panel">
+            <label class="stack" for="theme-mode">
+              <span class="label">Color Mode</span>
+              <div class="theme-mode-toggle">
+                <button id="theme-mode-dark" class="theme-mode-button" data-mode="dark">Dark</button>
+                <button id="theme-mode-light" class="theme-mode-button" data-mode="light">Light</button>
+              </div>
+            </label>
+            <label class="stack" for="theme-hue">
+              <span class="label">Color Hue</span>
+              <div class="theme-hue-control">
+                <input type="range" id="theme-hue" min="0" max="360" value="160" />
+                <div class="theme-hue-preview">
+                  <div class="theme-hue-indicator"></div>
+                  <span class="theme-hue-value">160°</span>
+                </div>
+              </div>
+            </label>
+            <div class="theme-preview">
+              <div class="theme-preview-card">
+                <div class="theme-preview-header">Preview</div>
+                <div class="theme-preview-content">
+                  <div class="theme-preview-button">Button</div>
+                  <div class="theme-preview-text">Sample text</div>
+                </div>
+              </div>
+            </div>
           </div>
           <div id="persona-modal" class="modal-overlay">
             <div class="modal">
