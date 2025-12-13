@@ -1309,6 +1309,12 @@ textarea::placeholder {
   animation: fadeIn var(--transition-base);
 }
 
+/* Confirmation modals should appear above other modals */
+#confirm-overlay,
+#canvas-delete-block-overlay {
+  z-index: 10001;
+}
+
 .modal-overlay.show {
   display: flex;
   animation: fadeIn var(--transition-base);
