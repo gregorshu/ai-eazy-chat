@@ -45,6 +45,31 @@ const cancelPersonaButton = document.getElementById('cancel-persona');
 const closePersonaModalButton = document.getElementById('close-persona-modal');
 const modelDropdown = document.getElementById('model-dropdown');
 const modelToggleButton = document.getElementById('model-toggle');
+// Canvas elements - may be null if HTML hasn't loaded yet, handled with null checks
+const canvasButton = document.getElementById('canvas-button');
+const canvasListOverlay = document.getElementById('canvas-list-overlay');
+const canvasOverlay = document.getElementById('canvas-overlay');
+const closeCanvasListButton = document.getElementById('close-canvas-list');
+const newCanvasButton = document.getElementById('new-canvas-button');
+const closeCanvasButton = document.getElementById('close-canvas');
+const canvasNameInput = document.getElementById('canvas-name-input');
+const canvasNewBlockButton = document.getElementById('canvas-new-block');
+const canvasAiEditButton = document.getElementById('canvas-ai-edit');
+const canvasListFromCanvasButton = document.getElementById('canvas-list-from-canvas');
+const canvasSelectAllButton = document.getElementById('canvas-select-all');
+const canvasDeselectAllButton = document.getElementById('canvas-deselect-all');
+const canvasCopyAllButton = document.getElementById('canvas-copy-all');
+const canvasUndoButton = document.getElementById('canvas-undo');
+const canvasRedoButton = document.getElementById('canvas-redo');
+const canvasAiEditOverlay = document.getElementById('canvas-ai-edit-overlay');
+const closeCanvasAiEditButton = document.getElementById('close-canvas-ai-edit');
+const cancelCanvasAiEditButton = document.getElementById('cancel-canvas-ai-edit');
+const applyCanvasAiEditButton = document.getElementById('apply-canvas-ai-edit');
+const canvasAiInstructionInput = document.getElementById('canvas-ai-instruction');
+const canvasDeleteBlockOverlay = document.getElementById('canvas-delete-block-overlay');
+const closeCanvasDeleteBlockButton = document.getElementById('close-canvas-delete-block');
+const cancelCanvasDeleteBlockButton = document.getElementById('cancel-canvas-delete-block');
+const confirmCanvasDeleteBlockButton = document.getElementById('confirm-canvas-delete-block');
 const modelSearchInput = document.getElementById('model-search');
 const modelList = document.getElementById('model-list');
 const refreshModelsButton = document.getElementById('refresh-models');
@@ -112,6 +137,7 @@ const defaultState = () => {
         folderId: 'root',
         files: [],
         messages: [],
+        canvases: [],
       },
     ],
     editingChatId: null,
@@ -140,6 +166,15 @@ const defaultState = () => {
     modelSearch: '',
     activeSettingsTab: 'model',
     theme: { mode: 'dark', hue: 160 },
+    openCanvasId: null,
+    openCanvasChatId: null,
+    canvasModalOpen: false,
+    canvasListModalOpen: false,
+    selectedBlockIds: [],
+    canvasAiEditDraft: '',
+    canvasAiEditSelection: null,
+    pendingDeleteBlock: null,
+    pendingCanvasPatches: null,
   };
 };
 
@@ -211,8 +246,38 @@ let appState = storedState
       activeSettingsTab: storedState.activeSettingsTab || 'model',
       settings: { ...baseDefaults.settings, ...fallbackSettings, activePersonaId: activePersonaId },
       theme: storedState.theme || baseDefaults.theme,
+      openCanvasId: storedState.openCanvasId || null,
+      openCanvasChatId: storedState.openCanvasChatId || null,
+      canvasModalOpen: storedState.canvasModalOpen || false,
+      canvasListModalOpen: storedState.canvasListModalOpen || false,
+      selectedBlockIds: Array.isArray(storedState.selectedBlockIds) ? storedState.selectedBlockIds : [],
+      canvasAiEditDraft: storedState.canvasAiEditDraft || '',
+      canvasAiEditSelection: storedState.canvasAiEditSelection || null,
+      pendingDeleteBlock: null,
+      pendingCanvasPatches: null,
     }
   : baseDefaults;
+
+// Ensure all chats have canvases array initialized (after appState is set)
+try {
+  if (appState.chats && Array.isArray(appState.chats)) {
+    let needsUpdate = false;
+    appState.chats = appState.chats.map(chat => {
+      if (!chat.canvases) {
+        needsUpdate = true;
+        return { ...chat, canvases: [] };
+      }
+      return chat;
+    });
+    // Only save if we actually modified something
+    if (needsUpdate) {
+      saveState(appState);
+    }
+  }
+} catch (err) {
+  console.error('Error initializing canvas arrays:', err);
+  // Don't break the app if canvas initialization fails
+}
 
 if (!appState.settings.model) {
   appState = {
@@ -296,6 +361,24 @@ function setState(update) {
       personaModal.classList.toggle('show', update.newPersonaModalOpen);
     }
     
+    return; // Early return to avoid unnecessary renders
+  }
+  
+  // Handle canvas-related updates - no chat re-render
+  const isCanvasUpdate = update.openCanvasId !== undefined ||
+                         update.openCanvasChatId !== undefined ||
+                         update.canvasModalOpen !== undefined ||
+                         update.canvasListModalOpen !== undefined ||
+                         update.selectedBlockIds !== undefined;
+  
+  if (isCanvasUpdate) {
+    // Only update canvas UI, no chat re-render
+    if (update.canvasModalOpen !== undefined || update.openCanvasId !== undefined) {
+      renderCanvas();
+    }
+    if (update.canvasListModalOpen !== undefined) {
+      renderCanvasList();
+    }
     return; // Early return to avoid unnecessary renders
   }
   
@@ -465,6 +548,519 @@ function getActivePersona() {
   return activePersona ? activePersona.content : '';
 }
 
+function getCanvasPersonaInstructions() {
+  return `You are editing a Canvas document. Canvas is a special editable document feature with the following rules:
+
+1. The document is authoritative - never rewrite the whole thing unless explicitly told to do so.
+2. Support partial, targeted edits: operate only on the selected block or text range provided.
+3. Accept and apply user's manual edits without interference.
+4. When editing, return changes as structured patches (replace/insert/delete) tied to block IDs or selection IDs.
+5. Preserve formatting, ordering, sections, and all unselected text exactly as-is.
+6. Never perform edits outside the given selection.
+7. Provide clean rewrites, expansions, summaries, or transformations only when requested.
+8. Be aware of context around the selection but do not rewrite it.
+9. Respect document versioning: edit only the current version and do not apply unseen changes.
+10. Avoid duplicating entire documents in responses; output only required patches or rewritten snippets.
+11. Ensure reversibility: produce atomic, deterministic edits that can be undone.
+12. Reject actions when instructions are ambiguous or when required selection metadata is missing.
+13. Do not hallucinate content; preserve the factual integrity of the document.
+
+When responding with edits, use this JSON format:
+{
+  "patches": [
+    {
+      "type": "replace" | "insert" | "delete",
+      "blockId": "block-id-string",
+      "oldContent": "original content (for replace/delete) - MUST match EXACTLY character-for-character",
+      "newContent": "new content (for replace/insert)",
+      "position": number (REQUIRED for text range selections - the start position in the block)
+    }
+  ]
+}
+
+CRITICAL: 
+- The "blockId" MUST be the exact ID shown in the context (e.g., "Block 1 (ID: abc123)" means blockId is "abc123")
+- The "oldContent" MUST match the current content EXACTLY, including all whitespace, newlines, and characters
+- When editing multiple blocks, provide separate patches for each block
+- For "replace" type without position: "oldContent" should match the ENTIRE current block content exactly
+- For "replace" type with position: "oldContent" must match the exact text at that position
+- Always verify blockId exists in the context before creating a patch
+
+IMPORTANT: When editing, you can reference canvases by their names (e.g., "edit Canvas 1" or "update the Canvas named 'My Notes'"). The canvas being edited is marked as "(CURRENT - EDIT THIS ONE)" in the context.
+
+Only include patches for blocks that need to be changed. Do not include patches for unchanged blocks.`;
+}
+
+// Canvas command parsing
+function parseCanvasCommand(message) {
+  const lowerMessage = message.toLowerCase().trim();
+  
+  // Check for canvas-related keywords
+  const canvasKeywords = ['canvas', 'edit canvas', 'edit block', 'add to canvas', 'rewrite selection', 'update canvas'];
+  const hasCanvasKeyword = canvasKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  if (!hasCanvasKeyword) {
+    return null;
+  }
+  
+  // Extract block reference if present (e.g., "edit block 2", "block 3")
+  const blockMatch = message.match(/block\s+(\d+)/i);
+  const blockIndex = blockMatch ? parseInt(blockMatch[1], 10) - 1 : null;
+  
+  // Check for selection references
+  const hasSelection = lowerMessage.includes('selection') || lowerMessage.includes('selected');
+  
+  return {
+    isCanvasCommand: true,
+    blockIndex: blockIndex,
+    hasSelection: hasSelection,
+    command: message,
+  };
+}
+
+// Save all pending manual edits from DOM to state
+function flushPendingCanvasEdits(canvasId) {
+  const canvasContent = document.getElementById('canvas-content');
+  if (!canvasContent) return;
+  
+  const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+  if (!canvas) return;
+  
+  // Get all block elements from DOM
+  const blockElements = canvasContent.querySelectorAll('.canvas-block[data-block-id]');
+  let hasChanges = false;
+  
+  blockElements.forEach(blockEl => {
+    const blockId = blockEl.getAttribute('data-block-id');
+    // Use textContent to preserve newlines as \n characters
+    const currentContent = blockEl.textContent || '';
+    const block = canvas.blocks.find(b => b.id === blockId);
+    
+    if (block && block.content !== currentContent) {
+      // Update block content immediately (bypass debounce)
+      block.content = currentContent;
+      hasChanges = true;
+    }
+  });
+  
+  if (hasChanges) {
+    canvas.updatedAt = Date.now();
+    saveState(appState);
+  }
+}
+
+// AI Edit Handler
+async function requestCanvasEdit(canvasId, command) {
+  if (!appState.openCanvasChatId || !canvasId) {
+    toastMessage('No canvas open');
+    return;
+  }
+  
+  const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+  if (!canvas) {
+    toastMessage('Canvas not found');
+    return;
+  }
+  
+  const chat = getSelectedChat();
+  if (!chat) {
+    toastMessage('No chat selected');
+    return;
+  }
+  
+  // Flush any pending manual edits before proceeding
+  flushPendingCanvasEdits(canvasId);
+  
+  // Re-fetch canvas after flushing edits to ensure we have latest state
+  const updatedCanvas = getCanvas(appState.openCanvasChatId, canvasId);
+  if (!updatedCanvas) {
+    toastMessage('Canvas not found after saving edits');
+    return;
+  }
+  
+  // Show loading state
+  if (canvasAiEditButton) {
+    canvasAiEditButton.disabled = true;
+    canvasAiEditButton.textContent = 'Editing...';
+  }
+  
+  // Build context for AI (use updated canvas)
+  let contextBlocks = [];
+  
+  // Use selected blocks if any, otherwise use all blocks from current canvas
+  if (appState.selectedBlockIds && appState.selectedBlockIds.length > 0) {
+    contextBlocks = updatedCanvas.blocks.filter(b => appState.selectedBlockIds.includes(b.id));
+  } else {
+    // Use all blocks if no selection
+    contextBlocks = updatedCanvas.blocks;
+  }
+  
+  // Get all canvases from the chat for full context
+  const allCanvases = (chat.canvases || []).filter(c => c && c.blocks && c.blocks.length > 0);
+  
+  // Build prompt
+  const canvasInstructions = getCanvasPersonaInstructions();
+  const activePersona = getActivePersona();
+  
+  // Build canvas context text (all canvases) - but mark selected blocks clearly
+  let canvasContextText = '';
+  if (allCanvases.length > 0) {
+    const canvasSections = allCanvases.map(canvas => {
+      const isCurrentCanvas = canvas.id === canvasId;
+      const blocksText = canvas.blocks.map((block, idx) => {
+        const isSelected = isCurrentCanvas && appState.selectedBlockIds && appState.selectedBlockIds.includes(block.id);
+        const selectedMarker = isSelected ? ' ⭐ SELECTED FOR EDITING' : '';
+        return `  [Block ${idx + 1}${selectedMarker}]\n  Block ID: "${block.id}"\n  Content:\n  ${block.content}`;
+      }).join('\n\n');
+      return `=== ${canvas.name}${isCurrentCanvas ? ' (CURRENT - EDIT THIS ONE)' : ''} ===\n${blocksText}`;
+    }).join('\n\n');
+    canvasContextText = `\n\nAll Canvases in this Chat (for context only):\n${canvasSections}`;
+  }
+  
+  // Build context for the canvas being edited - ONLY selected blocks
+  const currentCanvasContext = contextBlocks.map((block, idx) => {
+    return `[Block ${idx + 1}]\nBlock ID: "${block.id}"\nContent:\n${block.content}`;
+  }).join('\n\n');
+  
+  // Build user prompt with canvas instructions and context
+  // Server will build system prompt from persona + files
+  const selectionNote = appState.selectedBlockIds && appState.selectedBlockIds.length > 0
+    ? `\n\nCRITICAL: You must ONLY edit the blocks marked with ⭐ SELECTED FOR EDITING above. These are the ONLY blocks you should create patches for. Do not edit any other blocks, even if they appear in the context.`
+    : '';
+  
+  const userPrompt = `${canvasInstructions}\n\nBlocks to Edit (from "${updatedCanvas.name}"):\n${currentCanvasContext}${canvasContextText}${selectionNote}\n\nUser Request: ${command}\n\nPlease provide edits as JSON patches following the format specified in the instructions. ONLY create patches for blocks marked with ⭐ SELECTED FOR EDITING.`;
+  
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: appState.settings.model,
+        apiKey: appState.settings.apiKey,
+        persona: activePersona,
+        files: chat.files || [],
+        messages: [
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+    
+    // Handle streaming or non-streaming response
+    const contentType = response.headers.get('content-type') || '';
+    const isStream = contentType.includes('text/event-stream');
+    
+    let content = '';
+    
+    if (!response.ok) {
+      // Try to read error message
+      if (isStream) {
+        try {
+          content = await readEventStream(response, null);
+        } catch (e) {
+          content = e.responseContent || e.message || 'Streaming error';
+        }
+      } else {
+        try {
+          const errorData = await response.json();
+          content = errorData.error || errorData.message || response.statusText;
+        } catch (e) {
+          // If not JSON, try to read as text
+          try {
+            content = await response.text();
+          } catch (e2) {
+            content = response.statusText || 'Unknown error';
+          }
+        }
+      }
+      throw new Error(`API error (${response.status}): ${content}`);
+    }
+    
+    if (isStream) {
+      // Read streaming response
+      try {
+        content = await readEventStream(response, null);
+        // If content is empty or doesn't look like valid AI response, it might be an error
+        if (!content || content.trim().length === 0) {
+          throw new Error('Empty response from AI');
+        }
+      } catch (e) {
+        // If streaming fails, check if it's an error we created
+        if (e.responseContent) {
+          throw e;
+        }
+        // Otherwise, create a new error
+        const streamError = new Error('Failed to read stream: ' + (e.message || 'Unknown error'));
+        streamError.responseContent = e.responseContent || '';
+        throw streamError;
+      }
+    } else {
+      // Read JSON response
+      try {
+        const data = await response.json();
+        content = data.content || '';
+        // Check for error in JSON response
+        if (data.error) {
+          throw new Error(`API error: ${data.error}`);
+        }
+      } catch (e) {
+        // If response is not JSON, try to read as text
+        if (e.message && e.message.includes('API error')) {
+          throw e; // Re-throw API errors
+        }
+        try {
+          const textContent = await response.text();
+          // Store the content for debugging
+          const jsonError = new Error('Response is not valid JSON: ' + e.message);
+          jsonError.responseContent = textContent;
+          throw jsonError;
+        } catch (e2) {
+          const parseError = new Error('Failed to parse response: ' + e.message);
+          parseError.responseContent = '';
+          throw parseError;
+        }
+      }
+    }
+    
+    // Parse JSON patches from response
+    let patches = [];
+    try {
+      // Try to extract JSON from response
+      const jsonMatch = content.match(/\{[\s\S]*"patches"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        patches = parsed.patches || [];
+      } else {
+        // Try parsing entire response as JSON
+        const parsed = JSON.parse(content);
+        patches = parsed.patches || [];
+      }
+    } catch (e) {
+      toastMessage('Failed to parse AI response as patches. Response: ' + content.substring(0, 100));
+      // Restore selection state and reopen modal with saved draft
+      restoreCanvasSelection();
+      if (canvasAiEditOverlay) {
+        canvasAiEditOverlay.classList.add('show');
+        if (canvasAiInstructionInput) {
+          canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
+          setTimeout(() => canvasAiInstructionInput.focus(), 100);
+        }
+      }
+      // Re-render canvas to show restored selection
+      const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+      if (canvas) {
+        renderCanvasBlocks(canvas);
+      }
+      return;
+    }
+    
+    // Validate and prepare patches for review (don't apply yet)
+    if (patches.length > 0) {
+      const errors = [];
+      const validPatches = [];
+      const patchPreviews = [];
+      
+      // Get selected block IDs if any
+      const allowedBlockIds = appState.selectedBlockIds && appState.selectedBlockIds.length > 0
+        ? new Set(appState.selectedBlockIds)
+        : null; // null means all blocks are allowed
+      
+      patches.forEach((patch, patchIndex) => {
+        if (!patch.blockId || !patch.type) {
+          errors.push(`Patch ${patchIndex + 1}: Missing blockId or type`);
+          console.warn('Invalid patch:', patch);
+          return;
+        }
+        
+        // Validate that patch targets a selected block (if selection exists)
+        if (allowedBlockIds && !allowedBlockIds.has(patch.blockId)) {
+          errors.push(`Patch ${patchIndex + 1}: Block ${patch.blockId} is not selected for editing`);
+          console.warn(`Patch targets non-selected block: ${patch.blockId}. Selected blocks:`, Array.from(allowedBlockIds));
+          return;
+        }
+        
+        // Get fresh canvas state
+        const currentCanvas = getCanvas(appState.openCanvasChatId, canvasId);
+        if (!currentCanvas) {
+          errors.push(`Patch ${patchIndex + 1}: Canvas ${canvasId} not found`);
+          console.warn(`Canvas ${canvasId} not found`);
+          return;
+        }
+        
+        const block = currentCanvas.blocks.find(b => b.id === patch.blockId);
+        if (!block) {
+          errors.push(`Patch ${patchIndex + 1}: Block ${patch.blockId} not found in canvas`);
+          console.warn(`Block ${patch.blockId} not found`);
+          return;
+        }
+        
+        try {
+          let oldContent = '';
+          let newContent = '';
+          let isValid = false;
+          
+          if (patch.type === 'replace') {
+            if (patch.position !== undefined && patch.oldContent !== undefined) {
+              // Position-based replacement
+              const start = patch.position;
+              const end = start + patch.oldContent.length;
+              const actualOldContent = block.content.slice(start, end);
+              if (actualOldContent === patch.oldContent) {
+                oldContent = block.content;
+                newContent = block.content.slice(0, start) + (patch.newContent || '') + block.content.slice(end);
+                isValid = true;
+              } else {
+                const errorMsg = `Patch ${patchIndex + 1}: Content mismatch at position ${start}`;
+                errors.push(errorMsg);
+                console.warn(`Patch oldContent mismatch at position ${start}. Expected: "${patch.oldContent}", Found: "${actualOldContent}"`);
+              }
+            } else {
+              // Replace entire block
+              oldContent = block.content;
+              newContent = patch.newContent || '';
+              isValid = true;
+            }
+          } else if (patch.type === 'insert') {
+            const position = patch.position !== undefined ? patch.position : block.content.length;
+            oldContent = block.content;
+            newContent = block.content.slice(0, position) + (patch.newContent || '') + block.content.slice(position);
+            isValid = true;
+          } else if (patch.type === 'delete') {
+            if (patch.position !== undefined && patch.oldContent) {
+              const start = patch.position;
+              const end = start + patch.oldContent.length;
+              const actualOldContent = block.content.slice(start, end);
+              if (actualOldContent === patch.oldContent) {
+                oldContent = block.content;
+                newContent = block.content.slice(0, start) + block.content.slice(end);
+                isValid = true;
+              } else {
+                const errorMsg = `Patch ${patchIndex + 1}: Content mismatch at position ${start}`;
+                errors.push(errorMsg);
+                console.warn(`Patch oldContent mismatch at position ${start}. Expected: "${patch.oldContent}", Found: "${actualOldContent}"`);
+              }
+            } else {
+              // Delete entire block
+              oldContent = block.content;
+              newContent = '';
+              isValid = true;
+            }
+          } else {
+            errors.push(`Patch ${patchIndex + 1}: Unknown patch type "${patch.type}"`);
+            console.warn(`Unknown patch type: ${patch.type}`, patch);
+          }
+          
+          if (isValid) {
+            validPatches.push(patch);
+            patchPreviews.push({
+              patch,
+              blockId: patch.blockId,
+              blockIndex: currentCanvas.blocks.findIndex(b => b.id === patch.blockId),
+              oldContent,
+              newContent,
+              type: patch.type,
+            });
+          }
+        } catch (err) {
+          errors.push(`Patch ${patchIndex + 1}: ${err.message}`);
+          console.error('Error processing patch:', err, patch);
+        }
+      });
+      
+      if (errors.length > 0 && validPatches.length === 0) {
+        // All patches failed
+        let errorMessage = 'No patches could be applied';
+        errorMessage += '. Errors: ' + errors.slice(0, 3).join('; ');
+        if (errors.length > 3) {
+          errorMessage += ` (and ${errors.length - 3} more)`;
+        }
+        console.error('Patch application errors:', errors);
+        toastMessage(errorMessage, 5000);
+        restoreCanvasSelection();
+        if (canvasAiEditOverlay) {
+          canvasAiEditOverlay.classList.add('show');
+          if (canvasAiInstructionInput) {
+            canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
+            setTimeout(() => canvasAiInstructionInput.focus(), 100);
+          }
+        }
+        const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+        if (canvas) {
+          renderCanvasBlocks(canvas);
+        }
+        return;
+      }
+      
+      if (validPatches.length > 0) {
+        // Store pending patches for review
+        appState.pendingCanvasPatches = {
+          canvasId,
+          patches: patchPreviews,
+          errors: errors.length > 0 ? errors : null,
+        };
+        saveState(appState);
+        
+        // Show review UI
+        renderCanvasBlocks(updatedCanvas);
+        updateCanvasButtonStates(canvasId);
+        toastMessage(`${validPatches.length} change${validPatches.length > 1 ? 's' : ''} ready for review`, 3000);
+      }
+    } else {
+      toastMessage('No patches returned from AI');
+      // Restore selection state and reopen modal with saved draft
+      restoreCanvasSelection();
+      if (canvasAiEditOverlay) {
+        canvasAiEditOverlay.classList.add('show');
+        if (canvasAiInstructionInput) {
+          canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
+          setTimeout(() => canvasAiInstructionInput.focus(), 100);
+        }
+      }
+      // Re-render canvas to show restored selection
+      const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+      if (canvas) {
+        renderCanvasBlocks(canvas);
+      }
+    }
+  } catch (err) {
+    // Provide more helpful error messages
+    let errorMessage = err.message || 'Unknown error';
+    if (err.message && err.message.includes('JSON')) {
+      errorMessage = 'Invalid response format from AI. The AI may not have returned valid JSON patches.';
+    } else if (err.message && err.message.includes('API error')) {
+      errorMessage = err.message;
+    }
+    
+    toastMessage('Error editing canvas: ' + errorMessage, 4000);
+    console.error('Canvas edit error:', err);
+    
+    // Log the response content if available for debugging
+    if (err.responseContent) {
+      console.error('Response content:', err.responseContent.substring(0, 500));
+    }
+    
+    // Restore selection state and reopen modal with saved draft on error
+    restoreCanvasSelection();
+    if (canvasAiEditOverlay) {
+      canvasAiEditOverlay.classList.add('show');
+      if (canvasAiInstructionInput) {
+        canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
+        setTimeout(() => canvasAiInstructionInput.focus(), 100);
+      }
+    }
+    // Re-render canvas to show restored selection
+    const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+    if (canvas) {
+      renderCanvasBlocks(canvas);
+    }
+  } finally {
+    // Restore button state
+    if (canvasAiEditButton) {
+      canvasAiEditButton.disabled = false;
+      canvasAiEditButton.textContent = 'AI Edit';
+    }
+  }
+}
+
 // Theme utility functions
 function getThemeColors(mode, hue) {
   const isLight = mode === 'light';
@@ -547,6 +1143,1026 @@ function applyTheme(theme) {
       }
     `;
   }
+}
+
+// Canvas utility functions
+// Parse text into block structures (without IDs - IDs are assigned when blocks are created)
+function parseTextIntoBlocks(text) {
+  if (!text || text.trim() === '') {
+    return [{ content: '', type: 'text' }];
+  }
+  
+  const blocks = [];
+  const lines = text.split('\n');
+  let currentBlock = { content: '', type: 'text' };
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    
+    // Detect headings (lines starting with #)
+    if (trimmed.startsWith('#')) {
+      // Save previous block if it has content
+      if (currentBlock.content.trim()) {
+        blocks.push(currentBlock);
+      }
+      currentBlock = { content: trimmed, type: 'heading' };
+      blocks.push(currentBlock);
+      currentBlock = { content: '', type: 'text' };
+      continue;
+    }
+    
+    // Detect lists (lines starting with - or *)
+    if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
+      // Save previous block if it has content
+      if (currentBlock.content.trim()) {
+        blocks.push(currentBlock);
+      }
+      currentBlock = { content: trimmed, type: 'list' };
+      blocks.push(currentBlock);
+      currentBlock = { content: '', type: 'text' };
+      continue;
+    }
+    
+    // Empty line - split paragraph (any empty line creates a break)
+    if (trimmed === '') {
+      // If current block has content, finalize it and start a new one
+      if (currentBlock.content.trim()) {
+        blocks.push(currentBlock);
+        currentBlock = { content: '', type: 'text' };
+      }
+      // Skip empty lines (don't add them to blocks)
+      continue;
+    }
+    
+    // Non-empty line - add to current block
+    // If this is the first line of a new block, just set it
+    // Otherwise, add with a newline separator
+    if (currentBlock.content) {
+      currentBlock.content += '\n' + line;
+    } else {
+      currentBlock.content = line;
+    }
+  }
+  
+  // Add final block if it has content
+  if (currentBlock.content.trim()) {
+    blocks.push(currentBlock);
+  }
+  
+  // If no blocks were created (all empty), return one empty block
+  if (blocks.length === 0) {
+    return [{ content: '', type: 'text' }];
+  }
+  
+  return blocks;
+}
+
+// Canvas operations
+function createCanvas(chatId, name = null) {
+  const chat = appState.chats.find(c => c.id === chatId);
+  if (!chat) return null;
+  
+  if (!chat.canvases) {
+    chat.canvases = [];
+  }
+  
+  // Generate unique name if not provided
+  let canvasName = name ? name.trim() : null;
+  if (!canvasName) {
+    const existingNames = chat.canvases.map(c => c.name || '').filter(n => n.startsWith('Canvas '));
+    let canvasNumber = 1;
+    while (existingNames.includes(`Canvas ${canvasNumber}`)) {
+      canvasNumber++;
+    }
+    canvasName = `Canvas ${canvasNumber}`;
+  }
+  
+  const canvas = {
+    id: uuid(),
+    name: canvasName,
+    blocks: [{ id: uuid(), content: '', type: 'text' }],
+    patches: [],
+    version: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  
+  chat.canvases.push(canvas);
+  saveState(appState);
+  return canvas;
+}
+
+function deleteCanvas(chatId, canvasId) {
+  const chat = appState.chats.find(c => c.id === chatId);
+  if (!chat || !chat.canvases) return;
+  
+  chat.canvases = chat.canvases.filter(c => c.id !== canvasId);
+  
+  // Close if currently open
+  if (appState.openCanvasId === canvasId) {
+    appState.openCanvasId = null;
+    appState.openCanvasChatId = null;
+    appState.canvasModalOpen = false;
+  }
+  
+  saveState(appState);
+}
+
+function renameCanvas(chatId, canvasId, newName) {
+  const chat = appState.chats.find(c => c.id === chatId);
+  if (!chat || !chat.canvases) return;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return;
+  
+  canvas.name = newName.trim() || 'Untitled Canvas';
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+}
+
+function getCanvas(chatId, canvasId) {
+  const chat = appState.chats.find(c => c.id === chatId);
+  if (!chat || !chat.canvases) return null;
+  return chat.canvases.find(c => c.id === canvasId) || null;
+}
+
+function openCanvas(chatId, canvasId) {
+  const canvas = getCanvas(chatId, canvasId);
+  if (!canvas) return;
+  
+  appState.openCanvasId = canvasId;
+  appState.openCanvasChatId = chatId;
+  appState.canvasModalOpen = true;
+  appState.canvasListModalOpen = false;
+  saveState(appState);
+  renderCanvas();
+}
+
+// Restore canvas selection state from saved AI Edit selection
+function restoreCanvasSelection() {
+  if (appState.canvasAiEditSelection) {
+    appState.selectedBlockIds = appState.canvasAiEditSelection.blockIds || [];
+    saveState(appState);
+  }
+}
+
+function closeCanvas() {
+  appState.openCanvasId = null;
+  appState.openCanvasChatId = null;
+  appState.canvasModalOpen = false;
+  appState.selectedBlockIds = [];
+  appState.canvasAiEditSelection = null;
+  saveState(appState);
+  
+  const canvasOverlay = document.getElementById('canvas-overlay');
+  if (canvasOverlay) {
+    canvasOverlay.classList.remove('show');
+  }
+}
+
+// Patch system
+function createPatch(canvasId, type, blockId, oldContent, newContent, position) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return null;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return null;
+  
+  const patch = {
+    id: uuid(),
+    timestamp: Date.now(),
+    type: type, // 'replace' | 'insert' | 'delete'
+    blockId: blockId,
+    oldContent: oldContent,
+    newContent: newContent,
+    position: position,
+  };
+  
+  if (!canvas.patches) {
+    canvas.patches = [];
+  }
+  canvas.patches.push(patch);
+  canvas.version = (canvas.version || 0) + 1;
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  
+  return patch;
+}
+
+function applyPatch(canvas, patch) {
+  const block = canvas.blocks.find(b => b.id === patch.blockId);
+  if (!block) return canvas;
+  
+  const newCanvas = { ...canvas, blocks: [...canvas.blocks] };
+  const blockIndex = newCanvas.blocks.findIndex(b => b.id === patch.blockId);
+  
+  if (patch.type === 'replace') {
+    newCanvas.blocks[blockIndex] = { ...block, content: patch.newContent || '' };
+  } else if (patch.type === 'insert') {
+    const position = patch.position !== undefined ? patch.position : block.content.length;
+    const newContent = block.content.slice(0, position) + (patch.newContent || '') + block.content.slice(position);
+    newCanvas.blocks[blockIndex] = { ...block, content: newContent };
+  } else if (patch.type === 'delete') {
+    if (patch.position !== undefined && patch.oldContent) {
+      const start = patch.position;
+      const end = start + patch.oldContent.length;
+      const newContent = block.content.slice(0, start) + block.content.slice(end);
+      newCanvas.blocks[blockIndex] = { ...block, content: newContent };
+    } else {
+      // Delete entire block
+      newCanvas.blocks = newCanvas.blocks.filter(b => b.id !== patch.blockId);
+    }
+  }
+  
+  newCanvas.version = (newCanvas.version || 0) + 1;
+  newCanvas.updatedAt = Date.now();
+  return newCanvas;
+}
+
+function getInversePatch(patch) {
+  return {
+    id: uuid(),
+    timestamp: Date.now(),
+    type: patch.type,
+    blockId: patch.blockId,
+    oldContent: patch.newContent,
+    newContent: patch.oldContent,
+    position: patch.position,
+  };
+}
+
+// Check if content should be split into multiple blocks (contains paragraphs/newlines)
+function shouldSplitIntoBlocks(content) {
+  if (!content) return false;
+  // Split if content has multiple paragraphs (any newlines with empty lines or just multiple newlines)
+  // More lenient: split on any empty line, or if there are multiple lines
+  const hasEmptyLines = /\n\s*\n/.test(content);
+  const lines = content.split('\n').filter(l => l.trim().length > 0);
+  return hasEmptyLines || lines.length > 1;
+}
+
+// Apply content to a block, splitting into multiple blocks if it contains paragraphs
+function applyContentWithBlockSplitting(canvasId, targetBlockId, content, blockType = 'text') {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return;
+  
+  const targetBlock = canvas.blocks.find(b => b.id === targetBlockId);
+  if (!targetBlock) return;
+  
+  const targetIndex = canvas.blocks.findIndex(b => b.id === targetBlockId);
+  
+  // Parse content into blocks (handles paragraphs, headings, lists)
+  const newBlocks = parseTextIntoBlocks(content);
+  
+  if (newBlocks.length === 0) {
+    // Empty content, just update the block
+    updateBlock(canvasId, targetBlockId, '');
+    return;
+  }
+  
+  if (newBlocks.length === 1) {
+    // Single block, just update
+    updateBlock(canvasId, targetBlockId, newBlocks[0].content);
+    return;
+  }
+  
+  // Multiple blocks: replace target block with first new block, insert rest after
+  const firstBlock = newBlocks[0];
+  const remainingBlocks = newBlocks.slice(1);
+  
+  // Update target block with first new block's content
+  const oldContent = targetBlock.content;
+  targetBlock.content = firstBlock.content;
+  targetBlock.type = firstBlock.type;
+  createPatch(canvasId, 'replace', targetBlockId, oldContent, firstBlock.content);
+  
+  // Insert remaining blocks after target block
+  remainingBlocks.forEach((newBlock, index) => {
+    const insertPosition = targetIndex + 1 + index;
+    const block = { id: uuid(), content: newBlock.content, type: newBlock.type };
+    canvas.blocks.splice(insertPosition, 0, block);
+    createPatch(canvasId, 'insert', block.id, '', block.content, insertPosition);
+  });
+  
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+}
+
+// Block CRUD operations
+function createBlock(canvasId, content = '', type = 'text', position) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return null;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return null;
+  
+  const newBlock = { id: uuid(), content, type };
+  
+  if (position !== undefined && position >= 0 && position < canvas.blocks.length) {
+    canvas.blocks.splice(position, 0, newBlock);
+  } else {
+    canvas.blocks.push(newBlock);
+  }
+  
+  createPatch(canvasId, 'insert', newBlock.id, '', content, position);
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  return newBlock;
+}
+
+function updateBlock(canvasId, blockId, content) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return null;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return null;
+  
+  const block = canvas.blocks.find(b => b.id === blockId);
+  if (!block) return null;
+  
+  const oldContent = block.content;
+  block.content = content;
+  
+  createPatch(canvasId, 'replace', blockId, oldContent, content);
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  return block;
+}
+
+function deleteBlock(canvasId, blockId) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return null;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return null;
+  
+  const block = canvas.blocks.find(b => b.id === blockId);
+  if (!block) return null;
+  
+  const oldContent = block.content;
+  canvas.blocks = canvas.blocks.filter(b => b.id !== blockId);
+  
+  createPatch(canvasId, 'delete', blockId, oldContent, '');
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  return true;
+}
+
+// Parse a block and split it into multiple blocks based on paragraphs
+// Accept a canvas patch
+function acceptCanvasPatch(canvasId, blockId) {
+  if (!appState.pendingCanvasPatches || appState.pendingCanvasPatches.canvasId !== canvasId) {
+    return;
+  }
+  
+  const patchPreview = appState.pendingCanvasPatches.patches.find(p => p.blockId === blockId);
+  if (!patchPreview) {
+    return;
+  }
+  
+  const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+  if (!canvas) return;
+  
+  const block = canvas.blocks.find(b => b.id === blockId);
+  if (!block) return;
+  
+  // Apply the change
+  const newContent = patchPreview.newContent;
+  if (patchPreview.type === 'delete' && newContent === '') {
+    // Delete block
+    deleteBlock(canvasId, blockId);
+  } else {
+    // Check if new content should be split into multiple blocks
+    if (shouldSplitIntoBlocks(newContent)) {
+      applyContentWithBlockSplitting(canvasId, blockId, newContent, block.type);
+    } else {
+      updateBlock(canvasId, blockId, newContent);
+    }
+  }
+  
+  // Remove this patch from pending
+  appState.pendingCanvasPatches.patches = appState.pendingCanvasPatches.patches.filter(p => p.blockId !== blockId);
+  
+  // If no more pending patches, clear the pending state
+  if (appState.pendingCanvasPatches.patches.length === 0) {
+    appState.pendingCanvasPatches = null;
+    appState.canvasAiEditDraft = '';
+    appState.canvasAiEditSelection = null;
+    toastMessage('All changes applied');
+  } else {
+    toastMessage('Change accepted');
+  }
+  
+  saveState(appState);
+  
+  // Re-render canvas
+  const updatedCanvas = getCanvas(appState.openCanvasChatId, canvasId);
+  if (updatedCanvas) {
+    renderCanvasBlocks(updatedCanvas);
+    // Update button states after accepting
+    updateCanvasButtonStates(canvasId);
+  }
+}
+
+// Decline a canvas patch
+function declineCanvasPatch(canvasId, blockId) {
+  if (!appState.pendingCanvasPatches || appState.pendingCanvasPatches.canvasId !== canvasId) {
+    return;
+  }
+  
+  // Remove this patch from pending
+  appState.pendingCanvasPatches.patches = appState.pendingCanvasPatches.patches.filter(p => p.blockId !== blockId);
+  
+  // If no more pending patches, clear the pending state
+  if (appState.pendingCanvasPatches.patches.length === 0) {
+    appState.pendingCanvasPatches = null;
+    appState.canvasAiEditDraft = '';
+    appState.canvasAiEditSelection = null;
+    toastMessage('All changes declined');
+  } else {
+    toastMessage('Change declined');
+  }
+  
+  saveState(appState);
+  
+  // Re-render canvas
+  const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+  if (canvas) {
+    renderCanvasBlocks(canvas);
+    // Update button states after declining
+    updateCanvasButtonStates(canvasId);
+  }
+}
+
+// Toggle block selection for AI Edit
+function toggleBlockSelection(blockId) {
+  if (!appState.selectedBlockIds) {
+    appState.selectedBlockIds = [];
+  }
+  
+  const index = appState.selectedBlockIds.indexOf(blockId);
+  if (index > -1) {
+    // Deselect
+    appState.selectedBlockIds.splice(index, 1);
+  } else {
+    // Select
+    appState.selectedBlockIds.push(blockId);
+  }
+  
+  saveState(appState);
+}
+
+function parseBlockIntoParagraphs(canvasId, blockId) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return;
+  
+  const block = canvas.blocks.find(b => b.id === blockId);
+  if (!block) return;
+  
+  const blockIndex = canvas.blocks.findIndex(b => b.id === blockId);
+  if (blockIndex === -1) return;
+  
+  // Parse content into blocks
+  const newBlocks = parseTextIntoBlocks(block.content);
+  
+  if (newBlocks.length <= 1) {
+    // No paragraphs to split, nothing to do
+    toastMessage('No paragraphs found to split');
+    return;
+  }
+  
+  // Replace current block with first new block
+  const firstBlock = newBlocks[0];
+  const oldContent = block.content;
+  block.content = firstBlock.content;
+  block.type = firstBlock.type;
+  createPatch(canvasId, 'replace', blockId, oldContent, firstBlock.content);
+  
+  // Insert remaining blocks after current block
+  newBlocks.slice(1).forEach((newBlock, index) => {
+    const insertPosition = blockIndex + 1 + index;
+    const createdBlock = { id: uuid(), content: newBlock.content, type: newBlock.type };
+    canvas.blocks.splice(insertPosition, 0, createdBlock);
+    createPatch(canvasId, 'insert', createdBlock.id, '', createdBlock.content, insertPosition);
+  });
+  
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  toastMessage(`Split into ${newBlocks.length} block${newBlocks.length > 1 ? 's' : ''}`);
+}
+
+function splitBlock(canvasId, blockId, splitPosition) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return null;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return null;
+  
+  const block = canvas.blocks.find(b => b.id === blockId);
+  if (!block) return null;
+  
+  const blockIndex = canvas.blocks.findIndex(b => b.id === blockId);
+  const firstPart = block.content.slice(0, splitPosition);
+  const secondPart = block.content.slice(splitPosition);
+  
+  block.content = firstPart;
+  const newBlock = { id: uuid(), content: secondPart, type: block.type };
+  
+  canvas.blocks.splice(blockIndex + 1, 0, newBlock);
+  
+  createPatch(canvasId, 'replace', blockId, block.content + secondPart, firstPart);
+  createPatch(canvasId, 'insert', newBlock.id, '', secondPart, blockIndex + 1);
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  return newBlock;
+}
+
+function mergeBlocks(canvasId, blockId1, blockId2) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return null;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas) return null;
+  
+  const block1 = canvas.blocks.find(b => b.id === blockId1);
+  const block2 = canvas.blocks.find(b => b.id === blockId2);
+  if (!block1 || !block2) return null;
+  
+  const oldContent1 = block1.content;
+  const oldContent2 = block2.content;
+  block1.content = block1.content + '\n' + block2.content;
+  
+  canvas.blocks = canvas.blocks.filter(b => b.id !== blockId2);
+  
+  createPatch(canvasId, 'replace', blockId1, oldContent1, block1.content);
+  createPatch(canvasId, 'delete', blockId2, oldContent2, '');
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  return block1;
+}
+
+// Undo/Redo system
+function undoCanvasEdit(canvasId) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return false;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas || !canvas.patches || canvas.patches.length === 0) return false;
+  
+  // Find last non-undone patch
+  let lastPatchIndex = -1;
+  for (let i = canvas.patches.length - 1; i >= 0; i--) {
+    if (!canvas.patches[i].undone) {
+      lastPatchIndex = i;
+      break;
+    }
+  }
+  
+  if (lastPatchIndex === -1) return false;
+  
+  const patch = canvas.patches[lastPatchIndex];
+  const inversePatch = getInversePatch(patch);
+  
+  // Apply inverse patch
+  const block = canvas.blocks.find(b => b.id === patch.blockId);
+  if (block) {
+    if (patch.type === 'replace') {
+      block.content = patch.oldContent || '';
+    } else if (patch.type === 'insert') {
+      if (patch.position !== undefined) {
+        const position = patch.position;
+        const newContent = block.content.slice(0, position) + block.content.slice(position + (patch.newContent || '').length);
+        block.content = newContent;
+      } else {
+        block.content = block.content.replace(patch.newContent || '', '');
+      }
+    } else if (patch.type === 'delete') {
+      if (patch.position !== undefined) {
+        const position = patch.position;
+        const newContent = block.content.slice(0, position) + (patch.oldContent || '') + block.content.slice(position);
+        block.content = newContent;
+      } else {
+        // Re-insert deleted block
+        const blockIndex = canvas.blocks.findIndex(b => b.id === patch.blockId);
+        if (blockIndex === -1) {
+          canvas.blocks.push({ id: patch.blockId, content: patch.oldContent || '', type: 'text' });
+        }
+      }
+    }
+  }
+  
+  patch.undone = true;
+  canvas.version = (canvas.version || 0) - 1;
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  return true;
+}
+
+function redoCanvasEdit(canvasId) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return false;
+  
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas || !canvas.patches || canvas.patches.length === 0) return false;
+  
+  // Find last undone patch
+  let lastUndoneIndex = -1;
+  for (let i = canvas.patches.length - 1; i >= 0; i--) {
+    if (canvas.patches[i].undone) {
+      lastUndoneIndex = i;
+      break;
+    }
+  }
+  
+  if (lastUndoneIndex === -1) return false;
+  
+  const patch = canvas.patches[lastUndoneIndex];
+  
+  // Re-apply patch
+  const block = canvas.blocks.find(b => b.id === patch.blockId);
+  if (block) {
+    if (patch.type === 'replace') {
+      block.content = patch.newContent || '';
+    } else if (patch.type === 'insert') {
+      if (patch.position !== undefined) {
+        const position = patch.position;
+        const newContent = block.content.slice(0, position) + (patch.newContent || '') + block.content.slice(position);
+        block.content = newContent;
+      } else {
+        block.content += patch.newContent || '';
+      }
+    } else if (patch.type === 'delete') {
+      if (patch.position !== undefined && patch.oldContent) {
+        const start = patch.position;
+        const end = start + patch.oldContent.length;
+        const newContent = block.content.slice(0, start) + block.content.slice(end);
+        block.content = newContent;
+      } else {
+        // Delete block again
+        canvas.blocks = canvas.blocks.filter(b => b.id !== patch.blockId);
+      }
+    }
+  }
+  
+  patch.undone = false;
+  canvas.version = (canvas.version || 0) + 1;
+  canvas.updatedAt = Date.now();
+  saveState(appState);
+  return true;
+}
+
+function canUndo(canvasId) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return false;
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas || !canvas.patches) return false;
+  return canvas.patches.some(p => !p.undone);
+}
+
+function canRedo(canvasId) {
+  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  if (!chat || !chat.canvases) return false;
+  const canvas = chat.canvases.find(c => c.id === canvasId);
+  if (!canvas || !canvas.patches) return false;
+  return canvas.patches.some(p => p.undone);
+}
+
+// Block rendering
+function renderCanvasBlocks(canvas) {
+  const canvasContent = document.getElementById('canvas-content');
+  if (!canvasContent || !canvas) return;
+  
+  // Store current selection state before clearing
+  const savedBlockIds = appState.selectedBlockIds ? [...appState.selectedBlockIds] : [];
+  
+  canvasContent.innerHTML = '';
+  
+  canvas.blocks.forEach((block, index) => {
+    const blockWrapper = document.createElement('div');
+    blockWrapper.className = 'canvas-block-wrapper';
+    blockWrapper.setAttribute('data-block-id', block.id);
+    
+    const blockNumber = document.createElement('div');
+    blockNumber.className = 'canvas-block-number';
+    blockNumber.textContent = index + 1;
+    blockNumber.setAttribute('title', `Block ${index + 1}`);
+    
+    // Selection checkbox
+    const selectCheckbox = document.createElement('button');
+    selectCheckbox.className = 'ghost icon canvas-block-select';
+    selectCheckbox.setAttribute('aria-label', 'Select block');
+    selectCheckbox.textContent = '☐';
+    selectCheckbox.title = 'Select block for AI Edit';
+    const isSelected = savedBlockIds.includes(block.id);
+    if (isSelected) {
+      selectCheckbox.textContent = '☑';
+      selectCheckbox.classList.add('selected');
+      blockWrapper.classList.add('block-selected');
+    }
+    selectCheckbox.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleBlockSelection(block.id);
+      const updatedCanvas = getCanvas(appState.openCanvasChatId, canvas.id);
+      if (updatedCanvas) {
+        renderCanvasBlocks(updatedCanvas);
+      }
+    });
+    
+    const blockEl = document.createElement('div');
+    blockEl.className = `canvas-block ${block.type}`;
+    blockEl.setAttribute('data-block-id', block.id);
+    blockEl.setAttribute('contenteditable', 'true');
+    blockEl.textContent = block.content;
+    
+    // Manual edit handling
+    let editTimeout;
+    blockEl.addEventListener('input', (e) => {
+      clearTimeout(editTimeout);
+      editTimeout = setTimeout(() => {
+        const newContent = blockEl.textContent || '';
+        const oldContent = block.content;
+        if (newContent !== oldContent) {
+          updateBlock(canvas.id, block.id, newContent);
+          // Don't re-render on every edit to avoid losing focus/cursor position
+          // Just update the state, re-render will happen when needed
+        }
+      }, 500); // Debounce
+    });
+    
+    // Also handle blur to save immediately when user leaves the block
+    blockEl.addEventListener('blur', () => {
+      clearTimeout(editTimeout);
+      const newContent = blockEl.textContent || '';
+      const oldContent = block.content;
+      if (newContent !== oldContent) {
+        updateBlock(canvas.id, block.id, newContent);
+      }
+    });
+    
+    // Add action buttons for each block
+    const blockActions = document.createElement('div');
+    blockActions.className = 'canvas-block-actions';
+    
+    // Parse/Split button
+    const parseButton = document.createElement('button');
+    parseButton.className = 'ghost icon canvas-block-parse';
+    parseButton.setAttribute('aria-label', 'Parse and split paragraphs');
+    parseButton.textContent = '⇄';
+    parseButton.title = 'Parse paragraphs and split into blocks';
+    parseButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      parseBlockIntoParagraphs(canvas.id, block.id);
+      const updatedCanvas = getCanvas(appState.openCanvasChatId, canvas.id);
+      if (updatedCanvas) {
+        renderCanvasBlocks(updatedCanvas);
+      }
+    });
+    
+    // Delete button
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'ghost icon canvas-block-delete';
+    deleteButton.setAttribute('aria-label', 'Delete block');
+    deleteButton.textContent = '✕';
+    deleteButton.title = 'Delete block';
+    deleteButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      // Store block info for deletion
+      appState.pendingDeleteBlock = { canvasId: canvas.id, blockId: block.id, blockIndex: index + 1 };
+      // Show modal
+      if (canvasDeleteBlockOverlay) {
+        canvasDeleteBlockOverlay.classList.add('show');
+      }
+    });
+    
+    blockActions.appendChild(parseButton);
+    blockActions.appendChild(deleteButton);
+    
+    // Check if this block has pending changes
+    const pendingChanges = appState.pendingCanvasPatches && 
+                          appState.pendingCanvasPatches.canvasId === canvas.id &&
+                          appState.pendingCanvasPatches.patches.find(p => p.blockId === block.id);
+    
+    blockWrapper.appendChild(blockNumber);
+    blockWrapper.appendChild(selectCheckbox);
+    blockWrapper.appendChild(blockEl);
+    blockWrapper.appendChild(blockActions);
+    
+    // Create a container for the block and its proposed changes (if any)
+    const blockContainer = document.createElement('div');
+    blockContainer.className = 'canvas-block-container';
+    blockContainer.setAttribute('data-block-id', block.id);
+    
+    blockContainer.appendChild(blockWrapper);
+    
+    // Add proposed block below the old block if there are pending changes
+    if (pendingChanges) {
+      // Create a simple proposed block (just visual, not a real block)
+      const proposedBlock = document.createElement('div');
+      proposedBlock.className = 'canvas-block-proposed';
+      proposedBlock.setAttribute('data-block-id', block.id);
+      proposedBlock.setAttribute('data-proposed', 'true');
+      proposedBlock.textContent = pendingChanges.newContent || '(empty)';
+      proposedBlock.setAttribute('contenteditable', 'false');
+      
+      // Add Accept/Decline buttons at the bottom of proposed block
+      const proposedActions = document.createElement('div');
+      proposedActions.className = 'canvas-block-proposed-actions';
+      
+      const acceptButton = document.createElement('button');
+      acceptButton.className = 'primary canvas-block-review-accept';
+      acceptButton.setAttribute('aria-label', 'Accept change');
+      acceptButton.textContent = '✓ Accept';
+      acceptButton.title = 'Accept change';
+      acceptButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        acceptCanvasPatch(canvas.id, block.id);
+      });
+      
+      const declineButton = document.createElement('button');
+      declineButton.className = 'ghost canvas-block-review-decline';
+      declineButton.setAttribute('aria-label', 'Decline change');
+      declineButton.textContent = '✕ Decline';
+      declineButton.title = 'Decline change';
+      declineButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        declineCanvasPatch(canvas.id, block.id);
+      });
+      
+      proposedActions.appendChild(acceptButton);
+      proposedActions.appendChild(declineButton);
+      
+      proposedBlock.appendChild(proposedActions);
+      blockContainer.appendChild(proposedBlock);
+    }
+    
+    canvasContent.appendChild(blockContainer);
+  });
+  
+  // Update undo/redo buttons
+  const undoButton = document.getElementById('canvas-undo');
+  const redoButton = document.getElementById('canvas-redo');
+  if (undoButton) {
+    undoButton.disabled = !canUndo(canvas.id);
+  }
+  if (redoButton) {
+    redoButton.disabled = !canRedo(canvas.id);
+  }
+  
+  // Update button states based on pending changes
+  updateCanvasButtonStates(canvas.id);
+}
+
+// Check if canvas has pending changes
+function hasPendingCanvasChanges(canvasId) {
+  return appState.pendingCanvasPatches && 
+         appState.pendingCanvasPatches.canvasId === canvasId &&
+         appState.pendingCanvasPatches.patches &&
+         appState.pendingCanvasPatches.patches.length > 0;
+}
+
+// Update canvas button states (disable copy and AI Edit if pending changes)
+function updateCanvasButtonStates(canvasId) {
+  const hasPending = hasPendingCanvasChanges(canvasId);
+  
+  if (canvasCopyAllButton) {
+    canvasCopyAllButton.disabled = hasPending;
+    if (hasPending) {
+      canvasCopyAllButton.title = 'Cannot copy while changes are pending review';
+    } else {
+      canvasCopyAllButton.title = 'Copy all blocks as text';
+    }
+  }
+  
+  if (canvasAiEditButton) {
+    canvasAiEditButton.disabled = hasPending;
+    if (hasPending) {
+      canvasAiEditButton.title = 'Cannot edit while changes are pending review';
+    } else {
+      canvasAiEditButton.title = 'AI Edit';
+    }
+  }
+}
+
+function renderCanvas() {
+  if (!appState.openCanvasId || !appState.openCanvasChatId) return;
+  
+  const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+  if (!canvas) return;
+  
+  const canvasOverlay = document.getElementById('canvas-overlay');
+  const canvasNameInput = document.getElementById('canvas-name-input');
+  
+  // Update button states when rendering canvas
+  updateCanvasButtonStates(canvas.id);
+  
+  if (canvasOverlay) {
+    canvasOverlay.classList.toggle('show', appState.canvasModalOpen);
+  }
+  
+  if (canvasNameInput) {
+    canvasNameInput.value = canvas.name;
+  }
+  
+  renderCanvasBlocks(canvas);
+}
+
+function renderCanvasList() {
+  const canvasList = document.getElementById('canvas-list');
+  const canvasListOverlay = document.getElementById('canvas-list-overlay');
+  if (!canvasList || !canvasListOverlay) return;
+  
+  const chat = getSelectedChat();
+  if (!chat) return;
+  
+  const canvases = chat.canvases || [];
+  
+  canvasList.innerHTML = '';
+  
+  if (canvases.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'persona-item';
+    empty.style.textAlign = 'center';
+    empty.style.padding = '20px';
+    empty.textContent = 'No canvases yet. Create one to get started.';
+    canvasList.appendChild(empty);
+  } else {
+    canvases.forEach(canvas => {
+      const li = document.createElement('li');
+      li.className = 'persona-item';
+      
+      const header = document.createElement('div');
+      header.style.display = 'flex';
+      header.style.justifyContent = 'space-between';
+      header.style.alignItems = 'center';
+      header.style.marginBottom = '8px';
+      
+      const info = document.createElement('div');
+      const name = document.createElement('div');
+      name.style.fontWeight = '600';
+      name.style.marginBottom = '4px';
+      name.textContent = canvas.name;
+      
+      const date = document.createElement('div');
+      date.className = 'muted';
+      date.style.fontSize = '12px';
+      const updatedDate = new Date(canvas.updatedAt);
+      date.textContent = `Updated: ${updatedDate.toLocaleDateString()} ${updatedDate.toLocaleTimeString()}`;
+      
+      info.appendChild(name);
+      info.appendChild(date);
+      
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.gap = '8px';
+      
+      const openBtn = document.createElement('button');
+      openBtn.className = 'ghost';
+      openBtn.textContent = 'Open';
+      openBtn.onclick = () => {
+        openCanvas(chat.id, canvas.id);
+        renderCanvasList();
+      };
+      
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'ghost danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.onclick = () => {
+        openConfirmDialog({
+          title: 'Delete canvas',
+          context: 'Canvas',
+          description: `Delete "${canvas.name}"? This will remove the canvas and all its content.`,
+          confirmLabel: 'Delete canvas',
+          confirmVariant: 'danger',
+          onConfirm: () => {
+            deleteCanvas(chat.id, canvas.id);
+            renderCanvasList();
+          },
+        });
+      };
+      
+      actions.appendChild(openBtn);
+      actions.appendChild(deleteBtn);
+      
+      header.appendChild(info);
+      header.appendChild(actions);
+      li.appendChild(header);
+      canvasList.appendChild(li);
+    });
+  }
+  
+  canvasListOverlay.classList.toggle('show', appState.canvasListModalOpen);
 }
 
 function toastMessage(message, timeout = 2200) {
@@ -1996,6 +3612,26 @@ async function handleSend() {
     return;
   }
   promptInput.value = '';
+  
+  // Check for canvas commands
+  const canvasCommand = parseCanvasCommand(content);
+  if (canvasCommand && appState.openCanvasId) {
+    // Route to canvas edit flow
+    requestCanvasEdit(appState.openCanvasId, content);
+    
+    // Also add to chat history for context
+    const userMessage = { role: 'user', content };
+    const messageHistory = [...chat.messages, userMessage];
+    const chats = appState.chats.map((c) =>
+      c.id === chat.id ? { ...c, messages: messageHistory } : c,
+    );
+    appState.chats = chats;
+    saveState(appState);
+    renderMessages();
+    return;
+  }
+  
+  // Normal chat flow
   const userMessage = { role: 'user', content };
   const messageHistory = [...chat.messages, userMessage];
   sendChatCompletion(messageHistory);
@@ -2097,6 +3733,8 @@ async function readEventStream(response, onChunk) {
   let buffer = '';
   let fullText = '';
   let doneReading = false;
+  let hasValidData = false;
+  let hasSeenDataPrefix = false;
 
   while (!doneReading) {
     const { value, done } = await reader.read();
@@ -2106,45 +3744,137 @@ async function readEventStream(response, onChunk) {
     buffer = events.pop();
 
     for (const event of events) {
-      const lines = event
-        .split('\n')
-        .map((line) => line.replace(/^data:\s?/, '').trim())
-        .filter(Boolean);
+      // Split event into lines, handling SSE format properly
+      const rawLines = event.split('\n');
+      const lines = [];
+      
+      for (const rawLine of rawLines) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) continue; // Skip empty lines
+        
+        // Skip SSE comment lines (starting with :)
+        if (trimmed.startsWith(':')) {
+          continue;
+        }
+        
+        // Skip SSE event type declarations
+        if (trimmed.startsWith('event:')) {
+          continue;
+        }
+        
+        // Extract data from "data: ..." lines
+        if (trimmed.startsWith('data:')) {
+          const dataContent = trimmed.substring(5).trim();
+          if (dataContent) {
+            lines.push(dataContent);
+            hasSeenDataPrefix = true;
+          }
+        } else if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          // Might be JSON without data: prefix
+          lines.push(trimmed);
+        }
+        // Otherwise skip (status messages, etc.)
+      }
+      
       for (const line of lines) {
         if (line === '[DONE]') {
           doneReading = true;
           break;
         }
+        
         try {
           const parsed = JSON.parse(line);
+          // Check for error in response
+          if (parsed.error) {
+            const error = new Error(parsed.error.message || parsed.error || 'API error');
+            error.responseContent = JSON.stringify(parsed);
+            throw error;
+          }
           const delta =
             parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.message?.content || '';
           if (delta) {
+            hasValidData = true;
             fullText += delta;
             if (onChunk) onChunk(delta, fullText);
           }
         } catch (err) {
-          console.error('Failed to parse stream chunk', err, line);
+          // If it's an error object we created, re-throw it
+          if (err.responseContent) {
+            throw err;
+          }
+          // Skip lines that don't parse as JSON (status messages, etc.)
+          // Only log if it looks like it might be an actual error
+          if (line.startsWith('{') || line.startsWith('[')) {
+            // This looked like JSON but failed to parse - might be malformed
+            console.warn('Failed to parse stream chunk as JSON:', line.substring(0, 100));
+          }
+          // Otherwise, it's probably a status message, just skip it
         }
       }
       if (doneReading) break;
     }
   }
 
+  // Only throw error if we expected data but got none, and it's not just status messages
+  if (!hasValidData && fullText.length === 0 && hasSeenDataPrefix) {
+    const error = new Error('Stream completed but contained no valid content');
+    error.responseContent = buffer;
+    throw error;
+  }
+
+  // If we got some text but no valid JSON data, and it's not just status messages
+  if (!hasValidData && fullText.length > 0 && !fullText.match(/^[:a-zA-Z\s]+$/)) {
+    // If it doesn't look like just status messages, it might be an error
+    const error = new Error('Stream did not contain valid JSON data: ' + fullText.substring(0, 100));
+    error.responseContent = fullText;
+    throw error;
+  }
+
   return fullText;
 }
 
 async function performChatRequest({ chat, messageHistory, signal, onChunk }) {
+  // Build canvas context for all canvases in this chat
+  let canvasContext = '';
+  if (chat.canvases && chat.canvases.length > 0) {
+    const canvasSections = chat.canvases
+      .filter(c => c && c.blocks && c.blocks.length > 0)
+      .map(canvas => {
+        const blocksText = canvas.blocks.map((block, idx) => {
+          return `  [Block ${idx + 1}]\n  Block ID: "${block.id}"\n  Content:\n  ${block.content}`;
+        }).join('\n\n');
+        return `=== ${canvas.name} ===\n${blocksText}`;
+      }).join('\n\n');
+    
+    if (canvasSections) {
+      canvasContext = `\n\nCanvas Documents in this Chat:\n${canvasSections}`;
+    }
+  }
+  
+  // Prepend canvas context to the first user message if canvases exist
+  let enhancedMessageHistory = [...messageHistory];
+  if (canvasContext && enhancedMessageHistory.length > 0) {
+    const firstUserMessage = enhancedMessageHistory.find(m => m.role === 'user');
+    if (firstUserMessage) {
+      const firstUserIndex = enhancedMessageHistory.indexOf(firstUserMessage);
+      enhancedMessageHistory = [
+        ...enhancedMessageHistory.slice(0, firstUserIndex),
+        { ...firstUserMessage, content: firstUserMessage.content + canvasContext },
+        ...enhancedMessageHistory.slice(firstUserIndex + 1),
+      ];
+    }
+  }
+  
   for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal,
       body: JSON.stringify({
-        messages: messageHistory.map(({ role, content }) => ({ role, content })),
+        messages: enhancedMessageHistory.map(({ role, content }) => ({ role, content })),
         model: appState.settings.model,
         persona: getActivePersona(),
-        files: chat.files,
+        files: chat.files || [],
         stream: true,
         apiKey: appState.settings.apiKey || undefined,
       }),
@@ -2695,6 +4425,380 @@ function checkScreenWidth() {
   }
   // Re-render to update icon based on screen size
   render();
+}
+
+// Canvas event handlers
+if (canvasButton) {
+  canvasButton.addEventListener('click', () => {
+    const chat = getSelectedChat();
+    if (!chat) return;
+    
+    // If no canvases, create one and open it
+    if (!chat.canvases || chat.canvases.length === 0) {
+      const newCanvas = createCanvas(chat.id);
+      if (newCanvas) {
+        openCanvas(chat.id, newCanvas.id);
+        renderCanvas();
+      }
+    } else {
+      // Open canvas list
+      appState.canvasListModalOpen = true;
+      saveState(appState);
+      renderCanvasList();
+    }
+  });
+}
+
+if (closeCanvasListButton) {
+  closeCanvasListButton.addEventListener('click', () => {
+    appState.canvasListModalOpen = false;
+    saveState(appState);
+    renderCanvasList();
+  });
+}
+
+if (canvasListOverlay) {
+  canvasListOverlay.addEventListener('click', (e) => {
+    if (e.target === canvasListOverlay) {
+      appState.canvasListModalOpen = false;
+      saveState(appState);
+      renderCanvasList();
+    }
+  });
+}
+
+if (newCanvasButton) {
+  newCanvasButton.addEventListener('click', () => {
+    const chat = getSelectedChat();
+    if (!chat) return;
+    const newCanvas = createCanvas(chat.id);
+    if (newCanvas) {
+      openCanvas(chat.id, newCanvas.id);
+      renderCanvas();
+      renderCanvasList();
+    }
+  });
+}
+
+if (closeCanvasButton) {
+  closeCanvasButton.addEventListener('click', () => {
+    closeCanvas();
+  });
+}
+
+if (canvasOverlay) {
+  canvasOverlay.addEventListener('click', (e) => {
+    if (e.target === canvasOverlay) {
+      closeCanvas();
+    }
+  });
+}
+
+if (canvasNameInput) {
+  canvasNameInput.addEventListener('blur', () => {
+    if (!appState.openCanvasId || !appState.openCanvasChatId) return;
+    const newName = canvasNameInput.value.trim();
+    if (newName) {
+      renameCanvas(appState.openCanvasChatId, appState.openCanvasId, newName);
+    }
+  });
+  
+  canvasNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      canvasNameInput.blur();
+    }
+  });
+}
+
+if (canvasNewBlockButton) {
+  canvasNewBlockButton.addEventListener('click', () => {
+    if (!appState.openCanvasId) return;
+    
+    // Find position after selected block, or at the end if no selection
+    // Find position after last selected block, or at the end if no selection
+    let insertPosition = undefined;
+    if (appState.selectedBlockIds && appState.selectedBlockIds.length > 0) {
+      const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+      if (canvas) {
+        // Find the last selected block's index
+        let lastSelectedIndex = -1;
+        appState.selectedBlockIds.forEach(blockId => {
+          const index = canvas.blocks.findIndex(b => b.id === blockId);
+          if (index > lastSelectedIndex) {
+            lastSelectedIndex = index;
+          }
+        });
+        if (lastSelectedIndex >= 0) {
+          insertPosition = lastSelectedIndex + 1;
+        }
+      }
+    }
+    
+    createBlock(appState.openCanvasId, '', 'text', insertPosition);
+    const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+    if (canvas) {
+      renderCanvasBlocks(canvas);
+      // Focus the newly created block
+      setTimeout(() => {
+        const newBlockIndex = insertPosition !== undefined ? insertPosition : canvas.blocks.length - 1;
+        const blockEl = document.querySelector(`.canvas-block[data-block-id="${canvas.blocks[newBlockIndex]?.id}"]`);
+        if (blockEl) {
+          blockEl.focus();
+          // Place cursor at the start
+          const range = document.createRange();
+          const selection = window.getSelection();
+          range.selectNodeContents(blockEl);
+          range.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+      }, 50);
+    }
+  });
+}
+
+if (canvasUndoButton) {
+  canvasUndoButton.addEventListener('click', () => {
+    if (!appState.openCanvasId) return;
+    if (undoCanvasEdit(appState.openCanvasId)) {
+      const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+      if (canvas) {
+        renderCanvasBlocks(canvas);
+      }
+    }
+  });
+}
+
+if (canvasRedoButton) {
+  canvasRedoButton.addEventListener('click', () => {
+    if (!appState.openCanvasId) return;
+    if (redoCanvasEdit(appState.openCanvasId)) {
+      const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+      if (canvas) {
+        renderCanvasBlocks(canvas);
+      }
+    }
+  });
+}
+
+if (canvasAiEditButton) {
+  canvasAiEditButton.addEventListener('click', () => {
+    if (!appState.openCanvasId) return;
+    
+    // Check for pending changes
+    if (hasPendingCanvasChanges(appState.openCanvasId)) {
+      toastMessage('Cannot edit while changes are pending review. Please accept or decline all pending changes first.', 4000);
+      return;
+    }
+    
+    // Save current selection state before opening modal
+    appState.canvasAiEditSelection = {
+      blockIds: appState.selectedBlockIds ? [...appState.selectedBlockIds] : [],
+    };
+    saveState(appState);
+    
+    // Open AI edit modal
+    if (canvasAiEditOverlay) {
+      canvasAiEditOverlay.classList.add('show');
+      if (canvasAiInstructionInput) {
+        // Restore draft if available
+        canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
+        setTimeout(() => canvasAiInstructionInput.focus(), 100);
+      }
+    }
+  });
+}
+
+if (canvasListFromCanvasButton) {
+  canvasListFromCanvasButton.addEventListener('click', () => {
+    // Close canvas and open canvas list
+    closeCanvas();
+    appState.canvasListModalOpen = true;
+    saveState(appState);
+    renderCanvasList();
+  });
+}
+
+// Select all blocks
+if (canvasSelectAllButton) {
+  canvasSelectAllButton.addEventListener('click', () => {
+    if (!appState.openCanvasId || !appState.openCanvasChatId) return;
+    
+    const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+    if (!canvas || !canvas.blocks) return;
+    
+    // Select all block IDs
+    appState.selectedBlockIds = canvas.blocks.map(block => block.id);
+    saveState(appState);
+    
+    // Re-render to show selection
+    renderCanvasBlocks(canvas);
+    toastMessage(`Selected ${canvas.blocks.length} block${canvas.blocks.length !== 1 ? 's' : ''}`, 2000);
+  });
+}
+
+// Deselect all blocks
+if (canvasDeselectAllButton) {
+  canvasDeselectAllButton.addEventListener('click', () => {
+    if (!appState.openCanvasId) return;
+    
+    appState.selectedBlockIds = [];
+    saveState(appState);
+    
+    // Re-render to show deselection
+    const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+    if (canvas) {
+      renderCanvasBlocks(canvas);
+    }
+    toastMessage('All blocks deselected', 2000);
+  });
+}
+
+// Copy all blocks as text
+if (canvasCopyAllButton) {
+  canvasCopyAllButton.addEventListener('click', () => {
+    if (!appState.openCanvasId || !appState.openCanvasChatId) return;
+    
+    // Check for pending changes
+    if (hasPendingCanvasChanges(appState.openCanvasId)) {
+      toastMessage('Cannot copy while changes are pending review', 3000);
+      return;
+    }
+    
+    const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+    if (!canvas || !canvas.blocks || canvas.blocks.length === 0) {
+      toastMessage('No blocks to copy', 2000);
+      return;
+    }
+    
+    // Combine all block contents with double newlines between blocks
+    const allText = canvas.blocks.map(block => block.content).join('\n\n');
+    
+    // Copy to clipboard
+    navigator.clipboard.writeText(allText).then(() => {
+      toastMessage(`Copied ${canvas.blocks.length} block${canvas.blocks.length !== 1 ? 's' : ''} to clipboard`, 2000);
+    }).catch(err => {
+      console.error('Failed to copy to clipboard:', err);
+      toastMessage('Failed to copy to clipboard', 3000);
+    });
+  });
+}
+
+if (closeCanvasAiEditButton) {
+  closeCanvasAiEditButton.addEventListener('click', () => {
+    if (canvasAiEditOverlay) {
+      canvasAiEditOverlay.classList.remove('show');
+    }
+    // Don't clear draft - keep it for retry
+  });
+}
+
+if (cancelCanvasAiEditButton) {
+  cancelCanvasAiEditButton.addEventListener('click', () => {
+    if (canvasAiEditOverlay) {
+      canvasAiEditOverlay.classList.remove('show');
+    }
+    // Don't clear draft - keep it for retry
+  });
+}
+
+if (applyCanvasAiEditButton) {
+  applyCanvasAiEditButton.addEventListener('click', () => {
+    if (!appState.openCanvasId || !canvasAiInstructionInput) return;
+    
+    const instruction = canvasAiInstructionInput.value.trim();
+    if (!instruction) {
+      toastMessage('Please enter an edit instruction');
+      return;
+    }
+    
+    // Save draft before attempting edit
+    appState.canvasAiEditDraft = instruction;
+    saveState(appState);
+    
+    // Close modal
+    if (canvasAiEditOverlay) {
+      canvasAiEditOverlay.classList.remove('show');
+    }
+    
+    // Request edit (no selection parameter needed - uses selectedBlockIds from state)
+    requestCanvasEdit(appState.openCanvasId, instruction);
+  });
+}
+
+if (canvasAiEditOverlay) {
+  canvasAiEditOverlay.addEventListener('click', (e) => {
+    if (e.target === canvasAiEditOverlay) {
+      canvasAiEditOverlay.classList.remove('show');
+      // Don't clear draft - keep it for retry
+    }
+  });
+}
+
+if (canvasAiInstructionInput) {
+  canvasAiInstructionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      if (applyCanvasAiEditButton) {
+        applyCanvasAiEditButton.click();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      if (cancelCanvasAiEditButton) {
+        cancelCanvasAiEditButton.click();
+      }
+    }
+  });
+}
+
+// Block deletion modal handlers
+if (closeCanvasDeleteBlockButton) {
+  closeCanvasDeleteBlockButton.addEventListener('click', () => {
+    if (canvasDeleteBlockOverlay) {
+      canvasDeleteBlockOverlay.classList.remove('show');
+    }
+    appState.pendingDeleteBlock = null;
+  });
+}
+
+if (cancelCanvasDeleteBlockButton) {
+  cancelCanvasDeleteBlockButton.addEventListener('click', () => {
+    if (canvasDeleteBlockOverlay) {
+      canvasDeleteBlockOverlay.classList.remove('show');
+    }
+    appState.pendingDeleteBlock = null;
+  });
+}
+
+if (confirmCanvasDeleteBlockButton) {
+  confirmCanvasDeleteBlockButton.addEventListener('click', () => {
+    if (!appState.pendingDeleteBlock) return;
+    
+    const { canvasId, blockId } = appState.pendingDeleteBlock;
+    deleteBlock(canvasId, blockId);
+    
+    // Close modal
+    if (canvasDeleteBlockOverlay) {
+      canvasDeleteBlockOverlay.classList.remove('show');
+    }
+    appState.pendingDeleteBlock = null;
+    
+    // Re-render canvas
+    const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+    if (canvas) {
+      renderCanvasBlocks(canvas);
+    }
+  });
+}
+
+if (canvasDeleteBlockOverlay) {
+  canvasDeleteBlockOverlay.addEventListener('click', (e) => {
+    if (e.target === canvasDeleteBlockOverlay) {
+      canvasDeleteBlockOverlay.classList.remove('show');
+      appState.pendingDeleteBlock = null;
+    }
+  });
 }
 
 // Check on load and resize

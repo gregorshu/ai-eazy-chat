@@ -51,6 +51,7 @@
               <button id="expand-textarea" class="expand-icon" aria-label="Expand message field" title="Expand message field">⤢</button>
             </div>
             <div class="composer-buttons">
+              <button id="canvas-button" class="ghost" aria-label="Open canvas" title="Canvas">Canvas</button>
               <button id="send" class="primary">Send</button>
               <button id="cancel" class="ghost" aria-label="Cancel request" disabled>Cancel</button>
             </div>
@@ -239,6 +240,94 @@
         <div class="modal-footer">
           <button id="cancel-confirm" class="ghost">Cancel</button>
           <button id="confirm-action" class="primary danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+    <div id="canvas-list-overlay" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <p class="muted">Canvas</p>
+            <h3>Canvas Documents</h3>
+          </div>
+          <button id="close-canvas-list" class="ghost icon" aria-label="Close canvas list">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h4 style="margin: 0; font-size: 14px; color: var(--text);">Canvases</h4>
+            <button id="new-canvas-button" class="primary" type="button">+ New Canvas</button>
+          </div>
+          <ul id="canvas-list" class="personas-list"></ul>
+        </div>
+      </div>
+    </div>
+    <div id="canvas-overlay" class="modal-overlay">
+      <div class="canvas-modal">
+        <div class="canvas-header">
+          <input type="text" id="canvas-name-input" class="canvas-name-input" placeholder="Canvas name" />
+          <div class="canvas-actions">
+            <button id="canvas-select-all" class="ghost" title="Select all blocks">Select All</button>
+            <button id="canvas-deselect-all" class="ghost" title="Deselect all blocks">Deselect All</button>
+            <button id="canvas-copy-all" class="ghost" title="Copy all blocks as text">Copy All</button>
+            <button id="canvas-list-from-canvas" class="ghost" title="Canvas list">☰</button>
+            <button id="canvas-ai-edit" class="ghost">AI Edit</button>
+            <button id="canvas-new-block" class="ghost">+ Block</button>
+            <button id="close-canvas" class="ghost icon" aria-label="Close canvas">✕</button>
+          </div>
+        </div>
+        <div id="canvas-content" class="canvas-content" contenteditable="false">
+          <!-- Blocks rendered here -->
+        </div>
+        <div class="canvas-footer">
+          <button id="canvas-undo" class="ghost" disabled>Undo</button>
+          <button id="canvas-redo" class="ghost" disabled>Redo</button>
+        </div>
+      </div>
+    </div>
+    <div id="canvas-ai-edit-overlay" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <p class="muted">Canvas</p>
+            <h3>AI Edit Instructions</h3>
+          </div>
+          <button id="close-canvas-ai-edit" class="ghost icon" aria-label="Close AI edit dialog">✕</button>
+        </div>
+        <div class="modal-body">
+          <label class="stack" for="canvas-ai-instruction">
+            <span class="label">Edit Instruction</span>
+            <textarea
+              id="canvas-ai-instruction"
+              class="text-input"
+              rows="4"
+              placeholder="Enter your edit instruction for the canvas (e.g., 'Make the second paragraph more concise', 'Add a summary at the end')"
+            ></textarea>
+          </label>
+          <p class="muted" style="font-size: 0.875rem; margin-top: 4px;">
+            The AI will edit the selected blocks (use checkboxes on the right of blocks to select). If no blocks are selected, it will edit the entire canvas.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-canvas-ai-edit" class="ghost">Cancel</button>
+          <button id="apply-canvas-ai-edit" class="primary">Apply Edit</button>
+        </div>
+      </div>
+    </div>
+    <div id="canvas-delete-block-overlay" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <p class="muted">Canvas</p>
+            <h3>Delete Block</h3>
+          </div>
+          <button id="close-canvas-delete-block" class="ghost icon" aria-label="Close delete dialog">✕</button>
+        </div>
+        <div class="modal-body">
+          <p>Are you sure you want to delete this block? This action cannot be undone, but you can use Undo to restore it.</p>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-canvas-delete-block" class="ghost">Cancel</button>
+          <button id="confirm-canvas-delete-block" class="danger">Delete Block</button>
         </div>
       </div>
     </div>
