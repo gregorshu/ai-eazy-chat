@@ -1074,7 +1074,7 @@ textarea::placeholder {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
-  align-items: end;
+  align-items: stretch;
 }
 
 .composer-buttons {
@@ -1086,10 +1086,14 @@ textarea::placeholder {
 
 .textarea-wrapper {
   position: relative;
+  display: flex;
+  height: 100%;
 }
 
 .textarea-wrapper textarea {
   position: relative;
+  height: 100%;
+  min-height: 100%;
 }
 
 .expand-icon {

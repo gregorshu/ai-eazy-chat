@@ -1,4 +1,28 @@
-const stateKey = 'ai-eazy-chat-state';
+// Constants
+const CONFIG = {
+  // Timing
+  SAVE_STATE_DEBOUNCE_MS: 300,
+  BLOCK_EDIT_DEBOUNCE_MS: 500,
+  FOCUS_DELAY_MS: 100,
+  ANIMATION_DELAY_MS: 50,
+  DEFAULT_TOAST_TIMEOUT_MS: 2200,
+  ERROR_TOAST_TIMEOUT_MS: 5000,
+  INFO_TOAST_TIMEOUT_MS: 3000,
+  
+  // Retry configuration
+  RETRY_DELAYS_MS: [3000, 5000, 7000],
+  RATE_LIMIT_STATUS: 429,
+  
+  // Limits
+  MAX_CHATS_TO_KEEP: 50,
+  ERROR_MESSAGE_PREVIEW_LENGTH: 100,
+  ERROR_RESPONSE_PREVIEW_LENGTH: 500,
+  
+  // Storage
+  STATE_KEY: 'ai-eazy-chat-state',
+};
+
+const stateKey = CONFIG.STATE_KEY;
 const appShell = document.querySelector('.app-shell');
 const sidebar = document.querySelector('.sidebar');
 const messageContainer = document.getElementById('messages');
@@ -85,7 +109,7 @@ const confirmAction = document.getElementById('confirm-action');
 const cancelConfirmButton = document.getElementById('cancel-confirm');
 const closeConfirmButton = document.getElementById('close-confirm');
 let openChatMenuId = null;
-const retryDelays = [3000, 5000, 7000];
+const retryDelays = CONFIG.RETRY_DELAYS_MS;
 let activeAbortController = null;
 let isRequestPending = false;
 let wasFolderModalOpen = false;
@@ -97,20 +121,122 @@ function uuid() {
   return crypto.randomUUID();
 }
 
+let saveStateTimeout = null;
+
+// DOM batching queue for requestAnimationFrame batching
+let domUpdateQueue = [];
+let rafScheduled = false;
+
+// Batch DOM updates using requestAnimationFrame
+// This batches multiple DOM updates into a single frame for better performance
+function batchDOMUpdate(callback) {
+  domUpdateQueue.push(callback);
+  if (!rafScheduled) {
+    rafScheduled = true;
+    requestAnimationFrame(() => {
+      // Execute all queued updates
+      const queue = domUpdateQueue.slice();
+      domUpdateQueue = [];
+      rafScheduled = false;
+      
+      // Execute all callbacks
+      queue.forEach(cb => cb());
+    });
+  }
+}
+
+// Memoization cache
+const memoCache = new Map();
+
+// Memoization helper function
+function memoize(key, computeFn, dependencies = []) {
+  // Create cache key from function name and dependencies
+  const cacheKey = `${key}_${JSON.stringify(dependencies)}`;
+  
+  // Check if we have a cached value
+  if (memoCache.has(cacheKey)) {
+    return memoCache.get(cacheKey);
+  }
+  
+  // Compute and cache the value
+  const result = computeFn();
+  memoCache.set(cacheKey, result);
+  return result;
+}
+
+// Clear memoization cache when state changes
+function clearMemoCache(pattern = null) {
+  if (pattern) {
+    // Clear only entries matching pattern
+    for (const key of memoCache.keys()) {
+      if (key.startsWith(pattern)) {
+        memoCache.delete(key);
+      }
+    }
+  } else {
+    // Clear all cache
+    memoCache.clear();
+  }
+}
+
 function loadState() {
-  const raw = localStorage.getItem(stateKey);
-  if (!raw) return null;
   try {
+    const raw = localStorage.getItem(stateKey);
+    if (!raw) return null;
     return JSON.parse(raw);
   } catch (e) {
     console.error('Failed to parse state', e);
+    if (e.name === 'QuotaExceededError' || e.name === 'SecurityError') {
+      console.warn('LocalStorage access denied or quota exceeded');
+    }
     return null;
   }
 }
 
 function saveState(state) {
-  localStorage.setItem(stateKey, JSON.stringify(state));
+  clearTimeout(saveStateTimeout);
+  saveStateTimeout = setTimeout(() => {
+    try {
+      localStorage.setItem(stateKey, JSON.stringify(state));
+    } catch (e) {
+      if (e.name === 'QuotaExceededError') {
+        console.warn('LocalStorage quota exceeded');
+        toastMessage('Storage limit reached. Some data may not be saved. Consider clearing old chats.', CONFIG.ERROR_TOAST_TIMEOUT_MS);
+        // Attempt to clean up old data (optional - can be enhanced later)
+        try {
+          // Remove very old chats or large canvases
+          const cleanedState = { ...state };
+          // Keep only last N chats
+          if (cleanedState.chats && cleanedState.chats.length > CONFIG.MAX_CHATS_TO_KEEP) {
+            cleanedState.chats = cleanedState.chats.slice(-CONFIG.MAX_CHATS_TO_KEEP);
+            localStorage.setItem(stateKey, JSON.stringify(cleanedState));
+            toastMessage('Cleaned up old data. Please try again.', CONFIG.INFO_TOAST_TIMEOUT_MS);
+          }
+        } catch (cleanupError) {
+          console.error('Cleanup failed:', cleanupError);
+        }
+      } else if (e.name === 'SecurityError' || e.name === 'TypeError') {
+        console.warn('LocalStorage not available:', e);
+        // localStorage might be disabled - continue without saving
+      } else {
+        console.error('Failed to save state:', e);
+        toastMessage('Failed to save state. Changes may be lost on refresh.', CONFIG.ERROR_TOAST_TIMEOUT_MS);
+      }
+    }
+  }, CONFIG.SAVE_STATE_DEBOUNCE_MS);
 }
+
+// Ensure final save happens on page unload
+window.addEventListener('beforeunload', () => {
+  if (saveStateTimeout) {
+    clearTimeout(saveStateTimeout);
+    try {
+      localStorage.setItem(stateKey, JSON.stringify(appState));
+    } catch (e) {
+      console.error('Failed to save state on unload:', e);
+    }
+  }
+});
 
 const defaultModelOptions = [
   'openrouter/auto',
@@ -288,9 +414,12 @@ if (!appState.settings.model) {
 }
 
 // Ensure activePersonaId exists in personas array
-if (appState.personas.length > 0 && !appState.personas.find(p => p.id === appState.settings.activePersonaId)) {
-  appState.settings.activePersonaId = appState.personas[0].id;
-  saveState(appState);
+if (appState.personas.length > 0) {
+  const personaMap = buildPersonaMap();
+  if (!personaMap.has(appState.settings.activePersonaId)) {
+    appState.settings.activePersonaId = appState.personas[0].id;
+    saveState(appState);
+  }
 }
 
 // Track previous state for change detection
@@ -300,6 +429,14 @@ function setState(update) {
   prevState = { ...appState };
   appState = { ...appState, ...update };
   saveState(appState);
+  
+  // Clear memoization cache when relevant state changes
+  if (update.settings?.activePersonaId !== undefined || 
+      update.chats !== undefined || 
+      update.personas !== undefined ||
+      update.folders !== undefined) {
+    clearMemoCache();
+  }
   
   // Handle theme changes
   if (update.theme !== undefined) {
@@ -353,7 +490,7 @@ function setState(update) {
       folderOverlay.classList.toggle('show', update.newFolderModalOpen);
       if (update.newFolderModalOpen && folderNameInput) {
         folderNameInput.value = update.newFolderDraft || appState.newFolderDraft || '';
-        setTimeout(() => folderNameInput.focus(), 100);
+        setTimeout(() => folderNameInput.focus(), CONFIG.FOCUS_DELAY_MS);
       }
     }
     
@@ -415,7 +552,7 @@ function setState(update) {
     update.modelOptions !== undefined;
   
   if (needsFullRender) {
-    render();
+  render();
   } else {
     // Use granular updates for sidebar state changes
     syncSidebarState(prevState, update);
@@ -485,14 +622,16 @@ function syncSidebarState(prevState, update) {
   // Update folder editing state
   if (update.editingFolderId !== undefined) {
     if (prevState.editingFolderId) {
-      const prevFolder = appState.folders.find(f => f.id === prevState.editingFolderId);
+      const folderMap = buildFolderMap();
+      const prevFolder = folderMap.get(prevState.editingFolderId);
       if (prevFolder) {
         const folderEl = getFolderElement(prevFolder.id);
         updateFolderElement(folderEl, prevFolder);
       }
     }
     if (update.editingFolderId) {
-      const folder = appState.folders.find(f => f.id === update.editingFolderId);
+      const folderMap = buildFolderMap();
+      const folder = folderMap.get(update.editingFolderId);
       if (folder) {
         const folderEl = getFolderElement(folder.id);
         updateFolderElement(folderEl, folder);
@@ -503,14 +642,16 @@ function syncSidebarState(prevState, update) {
   // Update chat editing state
   if (update.editingChatId !== undefined) {
     if (prevState.editingChatId) {
-      const prevChat = appState.chats.find(c => c.id === prevState.editingChatId);
+      const chatMap = buildChatMap();
+      const prevChat = chatMap.get(prevState.editingChatId);
       if (prevChat) {
         const chatEl = getChatElement(prevChat.id);
         updateChatElement(chatEl, prevChat);
       }
     }
     if (update.editingChatId) {
-      const chat = appState.chats.find(c => c.id === update.editingChatId);
+      const chatMap = buildChatMap();
+      const chat = chatMap.get(update.editingChatId);
       if (chat) {
         const chatEl = getChatElement(chat.id);
         updateChatElement(chatEl, chat);
@@ -539,17 +680,47 @@ function syncSidebarState(prevState, update) {
   }
 }
 
+// Helper functions to build Maps for O(1) lookups
+function buildChatMap() {
+  return new Map(appState.chats.map(c => [c.id, c]));
+}
+
+function buildFolderMap() {
+  return new Map(appState.folders.map(f => [f.id, f]));
+}
+
+function buildPersonaMap() {
+  return new Map(appState.personas.map(p => [p.id, p]));
+}
+
+function buildCanvasMap(chat) {
+  if (!chat || !chat.canvases) return new Map();
+  return new Map(chat.canvases.map(c => [c.id, c]));
+}
+
+function buildBlockMap(canvas) {
+  if (!canvas || !canvas.blocks) return new Map();
+  return new Map(canvas.blocks.map(b => [b.id, b]));
+}
+
 function getSelectedChat() {
-  return appState.chats.find((c) => c.id === appState.selectedChatId) || appState.chats[0];
+  const chatMap = buildChatMap();
+  return chatMap.get(appState.selectedChatId) || appState.chats[0];
 }
 
 function getActivePersona() {
-  const activePersona = appState.personas.find((p) => p.id === appState.settings.activePersonaId);
-  return activePersona ? activePersona.content : '';
+  // Memoize based on active persona ID
+  return memoize('activePersona', () => {
+    const personaMap = buildPersonaMap();
+    const activePersona = personaMap.get(appState.settings.activePersonaId);
+    return activePersona ? activePersona.content : '';
+  }, [appState.settings.activePersonaId]);
 }
 
 function getCanvasPersonaInstructions() {
-  return `You are editing a Canvas document. Canvas is a special editable document feature with the following rules:
+  // Memoize this static instruction string
+  return memoize('canvasPersonaInstructions', () => {
+    return `You are editing a Canvas document. Canvas is a special editable document feature with the following rules:
 
 1. The document is authoritative - never rewrite the whole thing unless explicitly told to do so.
 2. Support partial, targeted edits: operate only on the selected block or text range provided.
@@ -589,6 +760,7 @@ CRITICAL:
 IMPORTANT: When editing, you can reference canvases by their names (e.g., "edit Canvas 1" or "update the Canvas named 'My Notes'"). The canvas being edited is marked as "(CURRENT - EDIT THIS ONE)" in the context.
 
 Only include patches for blocks that need to be changed. Do not include patches for unchanged blocks.`;
+  }, []);
 }
 
 // Canvas command parsing
@@ -634,7 +806,8 @@ function flushPendingCanvasEdits(canvasId) {
     const blockId = blockEl.getAttribute('data-block-id');
     // Use textContent to preserve newlines as \n characters
     const currentContent = blockEl.textContent || '';
-    const block = canvas.blocks.find(b => b.id === blockId);
+    const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(blockId);
     
     if (block && block.content !== currentContent) {
       // Update block content immediately (bypass debounce)
@@ -835,14 +1008,14 @@ async function requestCanvasEdit(canvasId, command) {
         patches = parsed.patches || [];
       }
     } catch (e) {
-      toastMessage('Failed to parse AI response as patches. Response: ' + content.substring(0, 100));
+      toastMessage('Failed to parse AI response as patches. Response: ' + content.substring(0, CONFIG.ERROR_MESSAGE_PREVIEW_LENGTH));
       // Restore selection state and reopen modal with saved draft
       restoreCanvasSelection();
       if (canvasAiEditOverlay) {
         canvasAiEditOverlay.classList.add('show');
         if (canvasAiInstructionInput) {
           canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
-          setTimeout(() => canvasAiInstructionInput.focus(), 100);
+          setTimeout(() => canvasAiInstructionInput.focus(), CONFIG.FOCUS_DELAY_MS);
         }
       }
       // Re-render canvas to show restored selection
@@ -886,7 +1059,8 @@ async function requestCanvasEdit(canvasId, command) {
           return;
         }
         
-        const block = currentCanvas.blocks.find(b => b.id === patch.blockId);
+        const blockMap = buildBlockMap(currentCanvas);
+    const block = blockMap.get(patch.blockId);
         if (!block) {
           errors.push(`Patch ${patchIndex + 1}: Block ${patch.blockId} not found in canvas`);
           console.warn(`Block ${patch.blockId} not found`);
@@ -954,7 +1128,7 @@ async function requestCanvasEdit(canvasId, command) {
             patchPreviews.push({
               patch,
               blockId: patch.blockId,
-              blockIndex: currentCanvas.blocks.findIndex(b => b.id === patch.blockId),
+              blockIndex: Array.from(buildBlockMap(currentCanvas).keys()).indexOf(patch.blockId),
               oldContent,
               newContent,
               type: patch.type,
@@ -974,13 +1148,13 @@ async function requestCanvasEdit(canvasId, command) {
           errorMessage += ` (and ${errors.length - 3} more)`;
         }
         console.error('Patch application errors:', errors);
-        toastMessage(errorMessage, 5000);
+        toastMessage(errorMessage, CONFIG.ERROR_TOAST_TIMEOUT_MS);
         restoreCanvasSelection();
         if (canvasAiEditOverlay) {
           canvasAiEditOverlay.classList.add('show');
           if (canvasAiInstructionInput) {
             canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
-            setTimeout(() => canvasAiInstructionInput.focus(), 100);
+            setTimeout(() => canvasAiInstructionInput.focus(), CONFIG.FOCUS_DELAY_MS);
           }
         }
         const canvas = getCanvas(appState.openCanvasChatId, canvasId);
@@ -1002,7 +1176,7 @@ async function requestCanvasEdit(canvasId, command) {
         // Show review UI
         renderCanvasBlocks(updatedCanvas);
         updateCanvasButtonStates(canvasId);
-        toastMessage(`${validPatches.length} change${validPatches.length > 1 ? 's' : ''} ready for review`, 3000);
+        toastMessage(`${validPatches.length} change${validPatches.length > 1 ? 's' : ''} ready for review`, CONFIG.INFO_TOAST_TIMEOUT_MS);
       }
     } else {
       toastMessage('No patches returned from AI');
@@ -1012,7 +1186,7 @@ async function requestCanvasEdit(canvasId, command) {
         canvasAiEditOverlay.classList.add('show');
         if (canvasAiInstructionInput) {
           canvasAiInstructionInput.value = appState.canvasAiEditDraft || '';
-          setTimeout(() => canvasAiInstructionInput.focus(), 100);
+          setTimeout(() => canvasAiInstructionInput.focus(), CONFIG.FOCUS_DELAY_MS);
         }
       }
       // Re-render canvas to show restored selection
@@ -1030,12 +1204,12 @@ async function requestCanvasEdit(canvasId, command) {
       errorMessage = err.message;
     }
     
-    toastMessage('Error editing canvas: ' + errorMessage, 4000);
+    toastMessage('Error editing canvas: ' + errorMessage, CONFIG.ERROR_TOAST_TIMEOUT_MS);
     console.error('Canvas edit error:', err);
     
     // Log the response content if available for debugging
     if (err.responseContent) {
-      console.error('Response content:', err.responseContent.substring(0, 500));
+      console.error('Response content:', err.responseContent.substring(0, CONFIG.ERROR_RESPONSE_PREVIEW_LENGTH));
     }
     
     // Restore selection state and reopen modal with saved draft on error
@@ -1220,7 +1394,8 @@ function parseTextIntoBlocks(text) {
 
 // Canvas operations
 function createCanvas(chatId, name = null) {
-  const chat = appState.chats.find(c => c.id === chatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(chatId);
   if (!chat) return null;
   
   if (!chat.canvases) {
@@ -1254,7 +1429,8 @@ function createCanvas(chatId, name = null) {
 }
 
 function deleteCanvas(chatId, canvasId) {
-  const chat = appState.chats.find(c => c.id === chatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(chatId);
   if (!chat || !chat.canvases) return;
   
   chat.canvases = chat.canvases.filter(c => c.id !== canvasId);
@@ -1270,10 +1446,12 @@ function deleteCanvas(chatId, canvasId) {
 }
 
 function renameCanvas(chatId, canvasId, newName) {
-  const chat = appState.chats.find(c => c.id === chatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(chatId);
   if (!chat || !chat.canvases) return;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return;
   
   canvas.name = newName.trim() || 'Untitled Canvas';
@@ -1282,9 +1460,11 @@ function renameCanvas(chatId, canvasId, newName) {
 }
 
 function getCanvas(chatId, canvasId) {
-  const chat = appState.chats.find(c => c.id === chatId);
-  if (!chat || !chat.canvases) return null;
-  return chat.canvases.find(c => c.id === canvasId) || null;
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(chatId);
+  if (!chat) return null;
+  const canvasMap = buildCanvasMap(chat);
+  return canvasMap.get(canvasId) || null;
 }
 
 function openCanvas(chatId, canvasId) {
@@ -1323,10 +1503,12 @@ function closeCanvas() {
 
 // Patch system
 function createPatch(canvasId, type, blockId, oldContent, newContent, position) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return null;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return null;
   
   const patch = {
@@ -1351,11 +1533,12 @@ function createPatch(canvasId, type, blockId, oldContent, newContent, position) 
 }
 
 function applyPatch(canvas, patch) {
-  const block = canvas.blocks.find(b => b.id === patch.blockId);
+    const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(patch.blockId);
   if (!block) return canvas;
   
   const newCanvas = { ...canvas, blocks: [...canvas.blocks] };
-  const blockIndex = newCanvas.blocks.findIndex(b => b.id === patch.blockId);
+  const blockIndex = Array.from(buildBlockMap(newCanvas).keys()).indexOf(patch.blockId);
   
   if (patch.type === 'replace') {
     newCanvas.blocks[blockIndex] = { ...block, content: patch.newContent || '' };
@@ -1404,16 +1587,19 @@ function shouldSplitIntoBlocks(content) {
 
 // Apply content to a block, splitting into multiple blocks if it contains paragraphs
 function applyContentWithBlockSplitting(canvasId, targetBlockId, content, blockType = 'text') {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return;
   
-  const targetBlock = canvas.blocks.find(b => b.id === targetBlockId);
+  const blockMap = buildBlockMap(canvas);
+  const targetBlock = blockMap.get(targetBlockId);
   if (!targetBlock) return;
   
-  const targetIndex = canvas.blocks.findIndex(b => b.id === targetBlockId);
+  const targetIndex = Array.from(buildBlockMap(canvas).keys()).indexOf(targetBlockId);
   
   // Parse content into blocks (handles paragraphs, headings, lists)
   const newBlocks = parseTextIntoBlocks(content);
@@ -1454,10 +1640,12 @@ function applyContentWithBlockSplitting(canvasId, targetBlockId, content, blockT
 
 // Block CRUD operations
 function createBlock(canvasId, content = '', type = 'text', position) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return null;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return null;
   
   const newBlock = { id: uuid(), content, type };
@@ -1475,13 +1663,16 @@ function createBlock(canvasId, content = '', type = 'text', position) {
 }
 
 function updateBlock(canvasId, blockId, content) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return null;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return null;
   
-  const block = canvas.blocks.find(b => b.id === blockId);
+  const blockMap = buildBlockMap(canvas);
+  const block = blockMap.get(blockId);
   if (!block) return null;
   
   const oldContent = block.content;
@@ -1494,13 +1685,16 @@ function updateBlock(canvasId, blockId, content) {
 }
 
 function deleteBlock(canvasId, blockId) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return null;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return null;
   
-  const block = canvas.blocks.find(b => b.id === blockId);
+  const blockMap = buildBlockMap(canvas);
+  const block = blockMap.get(blockId);
   if (!block) return null;
   
   const oldContent = block.content;
@@ -1527,7 +1721,8 @@ function acceptCanvasPatch(canvasId, blockId) {
   const canvas = getCanvas(appState.openCanvasChatId, canvasId);
   if (!canvas) return;
   
-  const block = canvas.blocks.find(b => b.id === blockId);
+    const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(blockId);
   if (!block) return;
   
   // Apply the change
@@ -1559,10 +1754,10 @@ function acceptCanvasPatch(canvasId, blockId) {
   
   saveState(appState);
   
-  // Re-render canvas
+  // Re-render canvas - accept may create/delete blocks, so use full render
   const updatedCanvas = getCanvas(appState.openCanvasChatId, canvasId);
   if (updatedCanvas) {
-    renderCanvasBlocks(updatedCanvas);
+    renderCanvasBlocks(updatedCanvas, { forceFullRender: true });
     // Update button states after accepting
     updateCanvasButtonStates(canvasId);
   }
@@ -1592,7 +1787,8 @@ function declineCanvasPatch(canvasId, blockId) {
   // Re-render canvas
   const canvas = getCanvas(appState.openCanvasChatId, canvasId);
   if (canvas) {
-    renderCanvasBlocks(canvas);
+    // Only update the block that had its patch declined
+    renderCanvasBlocks(canvas, { updatedBlockIds: [blockId] });
     // Update button states after declining
     updateCanvasButtonStates(canvasId);
   }
@@ -1617,16 +1813,19 @@ function toggleBlockSelection(blockId) {
 }
 
 function parseBlockIntoParagraphs(canvasId, blockId) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return;
   
-  const block = canvas.blocks.find(b => b.id === blockId);
+    const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(blockId);
   if (!block) return;
   
-  const blockIndex = canvas.blocks.findIndex(b => b.id === blockId);
+  const blockIndex = Array.from(buildBlockMap(canvas).keys()).indexOf(blockId);
   if (blockIndex === -1) return;
   
   // Parse content into blocks
@@ -1659,16 +1858,19 @@ function parseBlockIntoParagraphs(canvasId, blockId) {
 }
 
 function splitBlock(canvasId, blockId, splitPosition) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return null;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return null;
   
-  const block = canvas.blocks.find(b => b.id === blockId);
+  const blockMap = buildBlockMap(canvas);
+  const block = blockMap.get(blockId);
   if (!block) return null;
   
-  const blockIndex = canvas.blocks.findIndex(b => b.id === blockId);
+  const blockIndex = Array.from(buildBlockMap(canvas).keys()).indexOf(blockId);
   const firstPart = block.content.slice(0, splitPosition);
   const secondPart = block.content.slice(splitPosition);
   
@@ -1685,14 +1887,17 @@ function splitBlock(canvasId, blockId, splitPosition) {
 }
 
 function mergeBlocks(canvasId, blockId1, blockId2) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return null;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas) return null;
   
-  const block1 = canvas.blocks.find(b => b.id === blockId1);
-  const block2 = canvas.blocks.find(b => b.id === blockId2);
+  const blockMap = buildBlockMap(canvas);
+  const block1 = blockMap.get(blockId1);
+  const block2 = blockMap.get(blockId2);
   if (!block1 || !block2) return null;
   
   const oldContent1 = block1.content;
@@ -1710,10 +1915,12 @@ function mergeBlocks(canvasId, blockId1, blockId2) {
 
 // Undo/Redo system
 function undoCanvasEdit(canvasId) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return false;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas || !canvas.patches || canvas.patches.length === 0) return false;
   
   // Find last non-undone patch
@@ -1731,7 +1938,8 @@ function undoCanvasEdit(canvasId) {
   const inversePatch = getInversePatch(patch);
   
   // Apply inverse patch
-  const block = canvas.blocks.find(b => b.id === patch.blockId);
+    const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(patch.blockId);
   if (block) {
     if (patch.type === 'replace') {
       block.content = patch.oldContent || '';
@@ -1750,7 +1958,7 @@ function undoCanvasEdit(canvasId) {
         block.content = newContent;
       } else {
         // Re-insert deleted block
-        const blockIndex = canvas.blocks.findIndex(b => b.id === patch.blockId);
+        const blockIndex = Array.from(buildBlockMap(canvas).keys()).indexOf(patch.blockId);
         if (blockIndex === -1) {
           canvas.blocks.push({ id: patch.blockId, content: patch.oldContent || '', type: 'text' });
         }
@@ -1766,10 +1974,12 @@ function undoCanvasEdit(canvasId) {
 }
 
 function redoCanvasEdit(canvasId) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return false;
   
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas || !canvas.patches || canvas.patches.length === 0) return false;
   
   // Find last undone patch
@@ -1786,7 +1996,8 @@ function redoCanvasEdit(canvasId) {
   const patch = canvas.patches[lastUndoneIndex];
   
   // Re-apply patch
-  const block = canvas.blocks.find(b => b.id === patch.blockId);
+    const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(patch.blockId);
   if (block) {
     if (patch.type === 'replace') {
       block.content = patch.newContent || '';
@@ -1827,187 +2038,241 @@ function canUndo(canvasId) {
 }
 
 function canRedo(canvasId) {
-  const chat = appState.chats.find(c => c.id === appState.openCanvasChatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(appState.openCanvasChatId);
   if (!chat || !chat.canvases) return false;
-  const canvas = chat.canvases.find(c => c.id === canvasId);
+  const canvasMap = buildCanvasMap(chat);
+  const canvas = canvasMap.get(canvasId);
   if (!canvas || !canvas.patches) return false;
   return canvas.patches.some(p => p.undone);
 }
 
-// Block rendering
-function renderCanvasBlocks(canvas) {
+// Helper function to create a single block element
+function createBlockElement(block, index, savedBlockIds, pendingChanges) {
+  const blockWrapper = document.createElement('div');
+  blockWrapper.className = 'canvas-block-wrapper';
+  blockWrapper.setAttribute('data-block-id', block.id);
+  
+  const blockNumber = document.createElement('div');
+  blockNumber.className = 'canvas-block-number';
+  blockNumber.textContent = index + 1;
+  blockNumber.setAttribute('title', `Block ${index + 1}`);
+  
+  // Selection checkbox
+  const selectCheckbox = document.createElement('button');
+  selectCheckbox.className = 'ghost icon canvas-block-select';
+  selectCheckbox.setAttribute('aria-label', 'Select block');
+  selectCheckbox.textContent = '☐';
+  selectCheckbox.title = 'Select block for AI Edit';
+  const isSelected = savedBlockIds.includes(block.id);
+  if (isSelected) {
+    selectCheckbox.textContent = '☑';
+    selectCheckbox.classList.add('selected');
+    blockWrapper.classList.add('block-selected');
+  }
+  
+  const blockEl = document.createElement('div');
+  blockEl.className = `canvas-block ${block.type}`;
+  blockEl.setAttribute('data-block-id', block.id);
+  blockEl.setAttribute('contenteditable', 'true');
+  blockEl.textContent = block.content;
+  
+  // Add action buttons for each block
+  const blockActions = document.createElement('div');
+  blockActions.className = 'canvas-block-actions';
+  
+  // Parse/Split button
+  const parseButton = document.createElement('button');
+  parseButton.className = 'ghost icon canvas-block-parse';
+  parseButton.setAttribute('aria-label', 'Parse and split paragraphs');
+  parseButton.textContent = '⇄';
+  parseButton.title = 'Parse paragraphs and split into blocks';
+  
+  // Delete button
+  const deleteButton = document.createElement('button');
+  deleteButton.className = 'ghost icon canvas-block-delete';
+  deleteButton.setAttribute('aria-label', 'Delete block');
+  deleteButton.textContent = '✕';
+  deleteButton.title = 'Delete block';
+  
+  blockActions.appendChild(parseButton);
+  blockActions.appendChild(deleteButton);
+  
+  blockWrapper.appendChild(blockNumber);
+  blockWrapper.appendChild(selectCheckbox);
+  blockWrapper.appendChild(blockEl);
+  blockWrapper.appendChild(blockActions);
+  
+  // Create a container for the block and its proposed changes (if any)
+  const blockContainer = document.createElement('div');
+  blockContainer.className = 'canvas-block-container';
+  blockContainer.setAttribute('data-block-id', block.id);
+  
+  blockContainer.appendChild(blockWrapper);
+  
+  // Add proposed block below the old block if there are pending changes
+  if (pendingChanges) {
+    const proposedBlock = createProposedBlock(block.id, pendingChanges);
+    blockContainer.appendChild(proposedBlock);
+  }
+  
+  return blockContainer;
+}
+
+// Helper function to create proposed block element
+function createProposedBlock(blockId, pendingChanges) {
+  const proposedBlock = document.createElement('div');
+  proposedBlock.className = 'canvas-block-proposed';
+  proposedBlock.setAttribute('data-block-id', blockId);
+  proposedBlock.setAttribute('data-proposed', 'true');
+  proposedBlock.textContent = pendingChanges.newContent || '(empty)';
+  proposedBlock.setAttribute('contenteditable', 'false');
+  
+  // Add Accept/Decline buttons at the bottom of proposed block
+  const proposedActions = document.createElement('div');
+  proposedActions.className = 'canvas-block-proposed-actions';
+  
+  const acceptButton = document.createElement('button');
+  acceptButton.className = 'primary canvas-block-review-accept';
+  acceptButton.setAttribute('aria-label', 'Accept change');
+  acceptButton.textContent = '✓ Accept';
+  acceptButton.title = 'Accept change';
+  
+  const declineButton = document.createElement('button');
+  declineButton.className = 'ghost canvas-block-review-decline';
+  declineButton.setAttribute('aria-label', 'Decline change');
+  declineButton.textContent = '✕ Decline';
+  declineButton.title = 'Decline change';
+  
+  proposedActions.appendChild(acceptButton);
+  proposedActions.appendChild(declineButton);
+  
+  proposedBlock.appendChild(proposedActions);
+  return proposedBlock;
+}
+
+// Block rendering - optimized with incremental updates
+function renderCanvasBlocks(canvas, options = {}) {
   const canvasContent = document.getElementById('canvas-content');
   if (!canvasContent || !canvas) return;
   
-  // Store current selection state before clearing
+  const { forceFullRender = false, updatedBlockIds = null } = options;
+  
+  // Store current selection state
   const savedBlockIds = appState.selectedBlockIds ? [...appState.selectedBlockIds] : [];
   
-  canvasContent.innerHTML = '';
+  // Track existing DOM blocks
+  const existingBlocks = new Map();
+  const existingContainers = canvasContent.querySelectorAll('.canvas-block-container');
+  existingContainers.forEach(container => {
+    const blockId = container.getAttribute('data-block-id');
+    if (blockId) {
+      existingBlocks.set(blockId, container);
+    }
+  });
+  
+  // Track which blocks exist in the new state
+  const newBlockIds = new Set(canvas.blocks.map(b => b.id));
+  
+  // If force full render or no existing blocks, do full render
+  if (forceFullRender || existingBlocks.size === 0) {
+    canvasContent.innerHTML = '';
+    existingBlocks.clear();
+  }
+  
+  // Use DocumentFragment for batch DOM operations
+  const fragment = document.createDocumentFragment();
+  let hasNewBlocks = false;
   
   canvas.blocks.forEach((block, index) => {
-    const blockWrapper = document.createElement('div');
-    blockWrapper.className = 'canvas-block-wrapper';
-    blockWrapper.setAttribute('data-block-id', block.id);
+    const existingContainer = existingBlocks.get(block.id);
+    const shouldUpdate = forceFullRender || !existingContainer || 
+                        (updatedBlockIds && updatedBlockIds.includes(block.id));
     
-    const blockNumber = document.createElement('div');
-    blockNumber.className = 'canvas-block-number';
-    blockNumber.textContent = index + 1;
-    blockNumber.setAttribute('title', `Block ${index + 1}`);
-    
-    // Selection checkbox
-    const selectCheckbox = document.createElement('button');
-    selectCheckbox.className = 'ghost icon canvas-block-select';
-    selectCheckbox.setAttribute('aria-label', 'Select block');
-    selectCheckbox.textContent = '☐';
-    selectCheckbox.title = 'Select block for AI Edit';
-    const isSelected = savedBlockIds.includes(block.id);
-    if (isSelected) {
-      selectCheckbox.textContent = '☑';
-      selectCheckbox.classList.add('selected');
-      blockWrapper.classList.add('block-selected');
-    }
-    selectCheckbox.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      toggleBlockSelection(block.id);
-      const updatedCanvas = getCanvas(appState.openCanvasChatId, canvas.id);
-      if (updatedCanvas) {
-        renderCanvasBlocks(updatedCanvas);
-      }
-    });
-    
-    const blockEl = document.createElement('div');
-    blockEl.className = `canvas-block ${block.type}`;
-    blockEl.setAttribute('data-block-id', block.id);
-    blockEl.setAttribute('contenteditable', 'true');
-    blockEl.textContent = block.content;
-    
-    // Manual edit handling
-    let editTimeout;
-    blockEl.addEventListener('input', (e) => {
-      clearTimeout(editTimeout);
-      editTimeout = setTimeout(() => {
-        const newContent = blockEl.textContent || '';
-        const oldContent = block.content;
-        if (newContent !== oldContent) {
-          updateBlock(canvas.id, block.id, newContent);
-          // Don't re-render on every edit to avoid losing focus/cursor position
-          // Just update the state, re-render will happen when needed
-        }
-      }, 500); // Debounce
-    });
-    
-    // Also handle blur to save immediately when user leaves the block
-    blockEl.addEventListener('blur', () => {
-      clearTimeout(editTimeout);
-      const newContent = blockEl.textContent || '';
-      const oldContent = block.content;
-      if (newContent !== oldContent) {
-        updateBlock(canvas.id, block.id, newContent);
-      }
-    });
-    
-    // Add action buttons for each block
-    const blockActions = document.createElement('div');
-    blockActions.className = 'canvas-block-actions';
-    
-    // Parse/Split button
-    const parseButton = document.createElement('button');
-    parseButton.className = 'ghost icon canvas-block-parse';
-    parseButton.setAttribute('aria-label', 'Parse and split paragraphs');
-    parseButton.textContent = '⇄';
-    parseButton.title = 'Parse paragraphs and split into blocks';
-    parseButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      parseBlockIntoParagraphs(canvas.id, block.id);
-      const updatedCanvas = getCanvas(appState.openCanvasChatId, canvas.id);
-      if (updatedCanvas) {
-        renderCanvasBlocks(updatedCanvas);
-      }
-    });
-    
-    // Delete button
-    const deleteButton = document.createElement('button');
-    deleteButton.className = 'ghost icon canvas-block-delete';
-    deleteButton.setAttribute('aria-label', 'Delete block');
-    deleteButton.textContent = '✕';
-    deleteButton.title = 'Delete block';
-    deleteButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      // Store block info for deletion
-      appState.pendingDeleteBlock = { canvasId: canvas.id, blockId: block.id, blockIndex: index + 1 };
-      // Show modal
-      if (canvasDeleteBlockOverlay) {
-        canvasDeleteBlockOverlay.classList.add('show');
-      }
-    });
-    
-    blockActions.appendChild(parseButton);
-    blockActions.appendChild(deleteButton);
-    
-    // Check if this block has pending changes
+    // Check if block has pending changes
     const pendingChanges = appState.pendingCanvasPatches && 
                           appState.pendingCanvasPatches.canvasId === canvas.id &&
                           appState.pendingCanvasPatches.patches.find(p => p.blockId === block.id);
     
-    blockWrapper.appendChild(blockNumber);
-    blockWrapper.appendChild(selectCheckbox);
-    blockWrapper.appendChild(blockEl);
-    blockWrapper.appendChild(blockActions);
-    
-    // Create a container for the block and its proposed changes (if any)
-    const blockContainer = document.createElement('div');
-    blockContainer.className = 'canvas-block-container';
-    blockContainer.setAttribute('data-block-id', block.id);
-    
-    blockContainer.appendChild(blockWrapper);
-    
-    // Add proposed block below the old block if there are pending changes
-    if (pendingChanges) {
-      // Create a simple proposed block (just visual, not a real block)
-      const proposedBlock = document.createElement('div');
-      proposedBlock.className = 'canvas-block-proposed';
-      proposedBlock.setAttribute('data-block-id', block.id);
-      proposedBlock.setAttribute('data-proposed', 'true');
-      proposedBlock.textContent = pendingChanges.newContent || '(empty)';
-      proposedBlock.setAttribute('contenteditable', 'false');
+    if (existingContainer && !shouldUpdate) {
+      // Block exists and doesn't need update - just update selection state if needed
+      const blockWrapper = existingContainer.querySelector('.canvas-block-wrapper');
+      const selectCheckbox = existingContainer.querySelector('.canvas-block-select');
+      const isSelected = savedBlockIds.includes(block.id);
+      const currentlySelected = blockWrapper?.classList.contains('block-selected');
       
-      // Add Accept/Decline buttons at the bottom of proposed block
-      const proposedActions = document.createElement('div');
-      proposedActions.className = 'canvas-block-proposed-actions';
+      if (isSelected !== currentlySelected) {
+        if (selectCheckbox) {
+          selectCheckbox.textContent = isSelected ? '☑' : '☐';
+          selectCheckbox.classList.toggle('selected', isSelected);
+        }
+        blockWrapper?.classList.toggle('block-selected', isSelected);
+      }
       
-      const acceptButton = document.createElement('button');
-      acceptButton.className = 'primary canvas-block-review-accept';
-      acceptButton.setAttribute('aria-label', 'Accept change');
-      acceptButton.textContent = '✓ Accept';
-      acceptButton.title = 'Accept change';
-      acceptButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        acceptCanvasPatch(canvas.id, block.id);
-      });
+      // Update block number if index changed
+      const blockNumber = existingContainer.querySelector('.canvas-block-number');
+      if (blockNumber && blockNumber.textContent !== String(index + 1)) {
+        blockNumber.textContent = index + 1;
+        blockNumber.setAttribute('title', `Block ${index + 1}`);
+      }
       
-      const declineButton = document.createElement('button');
-      declineButton.className = 'ghost canvas-block-review-decline';
-      declineButton.setAttribute('aria-label', 'Decline change');
-      declineButton.textContent = '✕ Decline';
-      declineButton.title = 'Decline change';
-      declineButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        declineCanvasPatch(canvas.id, block.id);
-      });
+      // Update proposed block if pending changes state changed
+      const existingProposed = existingContainer.querySelector('.canvas-block-proposed');
+      if (pendingChanges && !existingProposed) {
+        // Need to add proposed block
+        const proposedBlock = createProposedBlock(block.id, pendingChanges);
+        existingContainer.appendChild(proposedBlock);
+      } else if (!pendingChanges && existingProposed) {
+        // Need to remove proposed block
+        existingProposed.remove();
+      } else if (pendingChanges && existingProposed) {
+        // Update proposed block content if it changed
+        const actions = existingProposed.querySelector('.canvas-block-proposed-actions');
+        const currentText = existingProposed.childNodes[0]?.textContent?.trim() || '';
+        const newContent = pendingChanges.newContent || '(empty)';
+        if (currentText !== newContent && currentText !== newContent.trim()) {
+          // Replace content while preserving actions
+          existingProposed.textContent = newContent;
+          if (actions) {
+            existingProposed.appendChild(actions);
+          }
+        }
+      }
       
-      proposedActions.appendChild(acceptButton);
-      proposedActions.appendChild(declineButton);
+      // Update block content if it changed (but preserve focus/cursor)
+      const blockEl = existingContainer.querySelector('.canvas-block');
+      if (blockEl && blockEl.textContent !== block.content) {
+        // Only update if not currently focused (to preserve cursor position)
+        if (document.activeElement !== blockEl) {
+          blockEl.textContent = block.content;
+        }
+      }
       
-      proposedBlock.appendChild(proposedActions);
-      blockContainer.appendChild(proposedBlock);
+      return; // Skip to next block
     }
     
-    canvasContent.appendChild(blockContainer);
+    // Remove existing container if it exists (will be replaced)
+    if (existingContainer) {
+      existingContainer.remove();
+    }
+    
+    hasNewBlocks = true;
+    
+    // Create new block container
+    const blockContainer = createBlockElement(block, index, savedBlockIds, pendingChanges);
+    fragment.appendChild(blockContainer);
+  });
+  
+  // Append all new blocks at once using fragment
+  if (hasNewBlocks) {
+    canvasContent.appendChild(fragment);
+  }
+  
+  // Remove blocks that no longer exist
+  existingBlocks.forEach((container, blockId) => {
+    if (!newBlockIds.has(blockId)) {
+      container.remove();
+    }
   });
   
   // Update undo/redo buttons
@@ -2022,6 +2287,130 @@ function renderCanvasBlocks(canvas) {
   
   // Update button states based on pending changes
   updateCanvasButtonStates(canvas.id);
+  
+  // Set up delegated event listeners for canvas blocks (only once)
+  if (canvasContent && !canvasContent.dataset.delegated) {
+    canvasContent.dataset.delegated = 'true';
+    canvasContent.addEventListener('click', handleCanvasBlockClick);
+    canvasContent.addEventListener('input', handleCanvasBlockInput);
+    canvasContent.addEventListener('blur', handleCanvasBlockBlur, true);
+  }
+}
+
+function handleCanvasBlockClick(e) {
+  const selectCheckbox = e.target.closest('.canvas-block-select');
+  if (selectCheckbox) {
+    e.stopPropagation();
+    e.preventDefault();
+    const blockContainer = selectCheckbox.closest('[data-block-id]');
+    const blockId = blockContainer?.getAttribute('data-block-id');
+    if (blockId) {
+      toggleBlockSelection(blockId);
+      const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+      if (canvas) {
+        // Only update selection state, not full re-render
+        renderCanvasBlocks(canvas, { updatedBlockIds: [blockId] });
+      }
+    }
+    return;
+  }
+
+  const parseButton = e.target.closest('.canvas-block-parse');
+  if (parseButton) {
+    e.stopPropagation();
+    e.preventDefault();
+    const blockContainer = parseButton.closest('[data-block-id]');
+    const blockId = blockContainer?.getAttribute('data-block-id');
+    if (blockId && appState.openCanvasId) {
+      parseBlockIntoParagraphs(appState.openCanvasId, blockId);
+      const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+      if (canvas) {
+        // Parse creates new blocks, so we need full render
+        renderCanvasBlocks(canvas, { forceFullRender: true });
+      }
+    }
+    return;
+  }
+
+  const deleteButton = e.target.closest('.canvas-block-delete');
+  if (deleteButton) {
+    e.stopPropagation();
+    e.preventDefault();
+    const blockContainer = deleteButton.closest('[data-block-id]');
+    const blockId = blockContainer?.getAttribute('data-block-id');
+    const canvasId = appState.openCanvasId;
+    if (blockId && canvasId) {
+      const canvas = getCanvas(appState.openCanvasChatId, canvasId);
+      if (canvas) {
+        const blockIndex = Array.from(buildBlockMap(canvas).keys()).indexOf(blockId);
+        appState.pendingDeleteBlock = { canvasId, blockId, blockIndex: blockIndex + 1 };
+        if (canvasDeleteBlockOverlay) {
+          canvasDeleteBlockOverlay.classList.add('show');
+        }
+      }
+    }
+    return;
+  }
+
+  const acceptButton = e.target.closest('.canvas-block-review-accept');
+  if (acceptButton) {
+    e.stopPropagation();
+    e.preventDefault();
+    const proposedBlock = acceptButton.closest('[data-proposed]');
+    const blockId = proposedBlock?.getAttribute('data-block-id');
+    if (blockId && appState.openCanvasId) {
+      acceptCanvasPatch(appState.openCanvasId, blockId);
+    }
+    return;
+  }
+
+  const declineButton = e.target.closest('.canvas-block-review-decline');
+  if (declineButton) {
+    e.stopPropagation();
+    e.preventDefault();
+    const proposedBlock = declineButton.closest('[data-proposed]');
+    const blockId = proposedBlock?.getAttribute('data-block-id');
+    if (blockId && appState.openCanvasId) {
+      declineCanvasPatch(appState.openCanvasId, blockId);
+    }
+    return;
+  }
+}
+
+function handleCanvasBlockInput(e) {
+  if (e.target.classList.contains('canvas-block') && e.target.hasAttribute('contenteditable')) {
+    const blockId = e.target.getAttribute('data-block-id');
+    if (!blockId) return;
+    
+    clearTimeout(e.target._editTimeout);
+    e.target._editTimeout = setTimeout(() => {
+      const newContent = e.target.textContent || '';
+      const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+      if (!canvas) return;
+      const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(blockId);
+      if (block && block.content !== newContent) {
+        updateBlock(appState.openCanvasId, blockId, newContent);
+      }
+      }, CONFIG.BLOCK_EDIT_DEBOUNCE_MS);
+  }
+}
+
+function handleCanvasBlockBlur(e) {
+  if (e.target.classList.contains('canvas-block') && e.target.hasAttribute('contenteditable')) {
+    const blockId = e.target.getAttribute('data-block-id');
+    if (!blockId) return;
+    
+    clearTimeout(e.target._editTimeout);
+    const newContent = e.target.textContent || '';
+    const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
+    if (!canvas) return;
+    const blockMap = buildBlockMap(canvas);
+    const block = blockMap.get(blockId);
+    if (block && block.content !== newContent) {
+      updateBlock(appState.openCanvasId, blockId, newContent);
+    }
+  }
 }
 
 // Check if canvas has pending changes
@@ -2165,7 +2554,7 @@ function renderCanvasList() {
   canvasListOverlay.classList.toggle('show', appState.canvasListModalOpen);
 }
 
-function toastMessage(message, timeout = 2200) {
+function toastMessage(message, timeout = CONFIG.DEFAULT_TOAST_TIMEOUT_MS) {
   toast.textContent = message;
   toast.classList.add('show');
   setTimeout(() => toast.classList.remove('show'), timeout);
@@ -2381,125 +2770,125 @@ function renderChat(chat) {
 
 // Render a single folder element with all its chats
 function renderFolder(folder) {
-  const li = document.createElement('li');
-  li.className = 'folder-item';
+    const li = document.createElement('li');
+    li.className = 'folder-item';
   li.setAttribute('data-folder-id', folder.id);
 
-  const header = document.createElement('div');
-  header.className = 'folder-header';
-  if (folder.id === appState.selectedFolderId) {
-    header.classList.add('active');
-  }
-  const headerMain = document.createElement('div');
-  headerMain.className = 'folder-header-main';
+    const header = document.createElement('div');
+    header.className = 'folder-header';
+    if (folder.id === appState.selectedFolderId) {
+      header.classList.add('active');
+    }
+    const headerMain = document.createElement('div');
+    headerMain.className = 'folder-header-main';
 
-  const toggle = document.createElement('button');
-  toggle.className = 'ghost icon folder-toggle';
-  const isExpanded = appState.expandedFolders[folder.id] !== false;
-  toggle.textContent = isExpanded ? '▾' : '▸';
-  toggle.onclick = (e) => {
-    e.stopPropagation();
-    const currentlyExpanded = appState.expandedFolders[folder.id] !== false;
-    setState({
-      expandedFolders: {
-        ...appState.expandedFolders,
-        [folder.id]: !currentlyExpanded,
-      },
-    });
-  };
-
-  const title = document.createElement('span');
-  title.textContent = folder.name;
-  headerMain.appendChild(toggle);
-  headerMain.appendChild(title);
-
-  headerMain.onclick = () => setState({ selectedFolderId: folder.id });
-
-  const actions = document.createElement('div');
-  actions.className = 'folder-actions';
-  const editBtn = document.createElement('button');
-  editBtn.className = 'ghost icon';
-  editBtn.textContent = '✎';
-  editBtn.title = 'Rename folder';
-  editBtn.onclick = (e) => {
-    e.stopPropagation();
-    startFolderRename(folder);
-  };
-
-  const deleteBtn = document.createElement('button');
-  deleteBtn.className = 'ghost icon danger';
-  deleteBtn.textContent = '✕';
-  deleteBtn.title = 'Delete folder';
-  deleteBtn.onclick = (e) => {
-    e.stopPropagation();
-    removeFolder(folder.id);
-  };
-
-  const hasChats = appState.chats.some((chat) => chat.folderId === folder.id);
-  if (folder.id === 'root') {
-    deleteBtn.disabled = true;
-    deleteBtn.title = 'Default folder cannot be deleted';
-  } else if (hasChats) {
-    deleteBtn.title = 'Move chats out before deleting';
-  }
-
-  actions.appendChild(editBtn);
-  actions.appendChild(deleteBtn);
-
-  header.appendChild(headerMain);
-  header.appendChild(actions);
-
-  li.appendChild(header);
-
-  const chatsList = document.createElement('ul');
-  chatsList.className = 'chat-list';
-  chatsList.style.display = appState.expandedFolders[folder.id] === false ? 'none' : 'flex';
-
-  if (appState.editingFolderId === folder.id) {
-    const renameRow = document.createElement('div');
-    renameRow.className = 'folder-rename';
-    renameRow.onclick = (e) => e.stopPropagation();
-
-    const input = document.createElement('input');
-    input.className = 'text-input';
-    input.placeholder = 'Folder name';
-    input.value =
-      appState.editingFolderDraft !== '' ? appState.editingFolderDraft : folder.name;
-    input.oninput = (e) => {
+    const toggle = document.createElement('button');
+    toggle.className = 'ghost icon folder-toggle';
+    const isExpanded = appState.expandedFolders[folder.id] !== false;
+    toggle.textContent = isExpanded ? '▾' : '▸';
+    toggle.onclick = (e) => {
       e.stopPropagation();
-      appState = { ...appState, editingFolderDraft: e.target.value, editingFolderId: folder.id };
-      saveState(appState);
+      const currentlyExpanded = appState.expandedFolders[folder.id] !== false;
+      setState({
+        expandedFolders: {
+          ...appState.expandedFolders,
+          [folder.id]: !currentlyExpanded,
+        },
+      });
     };
 
-    const renameActions = document.createElement('div');
-    renameActions.className = 'rename-actions';
+    const title = document.createElement('span');
+    title.textContent = folder.name;
+    headerMain.appendChild(toggle);
+    headerMain.appendChild(title);
 
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'primary';
-    saveBtn.textContent = 'Save';
-    saveBtn.onclick = (e) => {
+    headerMain.onclick = () => setState({ selectedFolderId: folder.id });
+
+    const actions = document.createElement('div');
+    actions.className = 'folder-actions';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'ghost icon';
+    editBtn.textContent = '✎';
+    editBtn.title = 'Rename folder';
+    editBtn.onclick = (e) => {
       e.stopPropagation();
-      submitFolderRename(folder.id);
+      startFolderRename(folder);
     };
 
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'ghost';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.onclick = (e) => {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'ghost icon danger';
+    deleteBtn.textContent = '✕';
+    deleteBtn.title = 'Delete folder';
+    deleteBtn.onclick = (e) => {
       e.stopPropagation();
-      cancelFolderRename();
+      removeFolder(folder.id);
     };
 
-    renameActions.appendChild(saveBtn);
-    renameActions.appendChild(cancelBtn);
+    const hasChats = appState.chats.some((chat) => chat.folderId === folder.id);
+    if (folder.id === 'root') {
+      deleteBtn.disabled = true;
+      deleteBtn.title = 'Default folder cannot be deleted';
+    } else if (hasChats) {
+      deleteBtn.title = 'Move chats out before deleting';
+    }
 
-    renameRow.appendChild(input);
-    renameRow.appendChild(renameActions);
-    li.appendChild(renameRow);
-  }
+    actions.appendChild(editBtn);
+    actions.appendChild(deleteBtn);
 
-  const chats = appState.chats.filter((chat) => chat.folderId === folder.id);
-  chats.forEach((chat) => {
+    header.appendChild(headerMain);
+    header.appendChild(actions);
+
+    li.appendChild(header);
+
+    const chatsList = document.createElement('ul');
+    chatsList.className = 'chat-list';
+    chatsList.style.display = appState.expandedFolders[folder.id] === false ? 'none' : 'flex';
+
+    if (appState.editingFolderId === folder.id) {
+      const renameRow = document.createElement('div');
+      renameRow.className = 'folder-rename';
+      renameRow.onclick = (e) => e.stopPropagation();
+
+      const input = document.createElement('input');
+      input.className = 'text-input';
+      input.placeholder = 'Folder name';
+      input.value =
+        appState.editingFolderDraft !== '' ? appState.editingFolderDraft : folder.name;
+      input.oninput = (e) => {
+        e.stopPropagation();
+        appState = { ...appState, editingFolderDraft: e.target.value, editingFolderId: folder.id };
+        saveState(appState);
+      };
+
+      const renameActions = document.createElement('div');
+      renameActions.className = 'rename-actions';
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'primary';
+      saveBtn.textContent = 'Save';
+      saveBtn.onclick = (e) => {
+        e.stopPropagation();
+        submitFolderRename(folder.id);
+      };
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'ghost';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = (e) => {
+        e.stopPropagation();
+        cancelFolderRename();
+      };
+
+      renameActions.appendChild(saveBtn);
+      renameActions.appendChild(cancelBtn);
+
+      renameRow.appendChild(input);
+      renameRow.appendChild(renameActions);
+      li.appendChild(renameRow);
+    }
+
+    const chats = appState.chats.filter((chat) => chat.folderId === folder.id);
+    chats.forEach((chat) => {
     const chatItem = renderChat(chat);
     chatsList.appendChild(chatItem);
   });
@@ -2636,44 +3025,44 @@ function updateChatElement(chatEl, chat) {
   // Handle editing state
   const existingRenameForm = chatEl.querySelector('.rename-row');
   const chatMenu = chatEl.querySelector('.chat-menu');
-  
-  if (appState.editingChatId === chat.id) {
+
+      if (appState.editingChatId === chat.id) {
     if (!existingRenameForm && chatMenu) {
-      const renameForm = document.createElement('div');
-      renameForm.className = 'rename-row';
-      const input = document.createElement('input');
-      input.className = 'text-input';
+        const renameForm = document.createElement('div');
+        renameForm.className = 'rename-row';
+        const input = document.createElement('input');
+        input.className = 'text-input';
       input.value = appState.editingChatDraft !== '' ? appState.editingChatDraft : chat.name;
-      input.placeholder = 'Chat name';
-      input.oninput = (e) => {
-        e.stopPropagation();
-        appState = { ...appState, editingChatDraft: e.target.value, editingChatId: chat.id };
-        saveState(appState);
-      };
+        input.placeholder = 'Chat name';
+        input.oninput = (e) => {
+          e.stopPropagation();
+          appState = { ...appState, editingChatDraft: e.target.value, editingChatId: chat.id };
+          saveState(appState);
+        };
 
-      const actions = document.createElement('div');
-      actions.className = 'rename-actions';
+        const actions = document.createElement('div');
+        actions.className = 'rename-actions';
 
-      const saveBtn = document.createElement('button');
-      saveBtn.className = 'primary';
-      saveBtn.textContent = 'Save';
-      saveBtn.onclick = (e) => {
-        e.stopPropagation();
-        submitChatRename(chat.id);
-      };
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'primary';
+        saveBtn.textContent = 'Save';
+        saveBtn.onclick = (e) => {
+          e.stopPropagation();
+          submitChatRename(chat.id);
+        };
 
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'ghost';
-      cancelBtn.textContent = 'Cancel';
-      cancelBtn.onclick = (e) => {
-        e.stopPropagation();
-        cancelChatRename();
-      };
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'ghost';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.onclick = (e) => {
+          e.stopPropagation();
+          cancelChatRename();
+        };
 
-      actions.appendChild(saveBtn);
-      actions.appendChild(cancelBtn);
-      renameForm.appendChild(input);
-      renameForm.appendChild(actions);
+        actions.appendChild(saveBtn);
+        actions.appendChild(cancelBtn);
+        renameForm.appendChild(input);
+        renameForm.appendChild(actions);
       
       // Remove rename button and add form
       const renameBtn = chatMenu.querySelector('button:first-child');
@@ -2731,7 +3120,7 @@ function renderFolders() {
         const nextEl = getFolderElement(nextFolder.id);
         if (nextEl) {
           folderList.insertBefore(folderEl, nextEl);
-        } else {
+      } else {
           folderList.appendChild(folderEl);
         }
       } else {
@@ -2805,12 +3194,12 @@ function updateStreamingMessage(content) {
       // Smooth scroll to bottom
       requestAnimationFrame(() => {
         messageContainer.scrollTop = messageContainer.scrollHeight;
-      });
+    });
       return true;
     }
   }
   return false;
-}
+  }
 
 function renderMessages() {
   const chat = getSelectedChat();
@@ -2839,7 +3228,8 @@ function renderMessages() {
   lastRenderedChatId = chat.id;
   lastRenderedMessageCount = chat.messages.length;
   
-  messageContainer.innerHTML = '';
+  // Use DocumentFragment for batch DOM operations
+  const fragment = document.createDocumentFragment();
   const lastUserIndex = findLastUserIndex(chat.messages);
   chat.messages.forEach((msg, index) => {
     const div = document.createElement('div');
@@ -2943,14 +3333,20 @@ function renderMessages() {
       div.appendChild(actions);
     }
 
-    messageContainer.appendChild(div);
+    fragment.appendChild(div);
   });
+  
+  // Batch append all messages at once
+  messageContainer.innerHTML = '';
+  messageContainer.appendChild(fragment);
   messageContainer.scrollTop = messageContainer.scrollHeight;
 }
 
 function renderFiles() {
   const chat = getSelectedChat();
-  fileList.innerHTML = '';
+  
+  // Use DocumentFragment for batch DOM operations
+  const fragment = document.createDocumentFragment();
   chat.files.forEach((file) => {
     const li = document.createElement('li');
     li.className = 'pill';
@@ -2960,14 +3356,20 @@ function renderFiles() {
     remove.className = 'remove';
     remove.onclick = () => removeFile(file.id);
     li.appendChild(remove);
-    fileList.appendChild(li);
+    fragment.appendChild(li);
   });
+  
+  // Batch append all files at once
+  fileList.innerHTML = '';
+  fileList.appendChild(fragment);
 }
 
 function renderPersonas() {
   if (!personasList) return;
-  personasList.innerHTML = '';
   
+  // Use DocumentFragment for batch DOM operations
+  const fragment = document.createDocumentFragment();
+
   appState.personas.forEach((persona) => {
     const li = document.createElement('li');
     li.className = 'persona-item';
@@ -3022,8 +3424,12 @@ function renderPersonas() {
     header.appendChild(info);
     header.appendChild(actions);
     li.appendChild(header);
-    personasList.appendChild(li);
+    fragment.appendChild(li);
   });
+  
+  // Batch append all personas at once
+  personasList.innerHTML = '';
+  personasList.appendChild(fragment);
 }
 
 function getModelOptions() {
@@ -3106,8 +3512,8 @@ function render() {
     toggleSidebarButton.textContent = appState.sidebarHidden ? '▾' : '▴';
     toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
   } else {
-    toggleSidebarButton.textContent = appState.sidebarHidden ? '⟩' : '⟨';
-    toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
+  toggleSidebarButton.textContent = appState.sidebarHidden ? '⟩' : '⟨';
+  toggleSidebarButton.setAttribute('aria-label', appState.sidebarHidden ? 'Show menu' : 'Hide menu');
   }
   // Persona tab is now managed separately, no need to set input value here
   settingsModelInput.value = appState.settings.model || 'openrouter/auto';
@@ -3130,10 +3536,10 @@ function render() {
   // Modal visibility is now handled in setState, but keep this for initial render
   const shouldShowFolderModal = appState.newFolderModalOpen;
   if (folderOverlay) {
-    folderOverlay.classList.toggle('show', shouldShowFolderModal);
+  folderOverlay.classList.toggle('show', shouldShowFolderModal);
   }
   if (folderNameInput) {
-    folderNameInput.value = appState.newFolderDraft || '';
+  folderNameInput.value = appState.newFolderDraft || '';
   }
   if (shouldShowFolderModal && !wasFolderModalOpen) {
     folderNameInput.focus();
@@ -3193,7 +3599,8 @@ function addChat(folderId) {
 }
 
 function removeChat(chatId) {
-  const chat = appState.chats.find((entry) => entry.id === chatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(chatId);
   if (!chat) return;
   openConfirmDialog({
     title: 'Delete chat',
@@ -3260,7 +3667,8 @@ function removeChat(chatId) {
 }
 
 function renameChat(chatId) {
-  const chat = appState.chats.find((c) => c.id === chatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(chatId);
   if (!chat) return;
   const draft =
     appState.editingChatDraft !== '' ? appState.editingChatDraft : chat.name || '';
@@ -3283,7 +3691,8 @@ function renameChat(chatId) {
   // Update chat element in DOM
   const chatEl = getChatElement(chatId);
   if (chatEl) {
-    updateChatElement(chatEl, chats.find(c => c.id === chatId));
+    const chatMap = buildChatMap();
+    updateChatElement(chatEl, chatMap.get(chatId));
   } else {
     // Element doesn't exist, need full render
     render();
@@ -3330,7 +3739,8 @@ function cancelChatRename() {
 }
 
 function renameFolder(folderId) {
-  const folder = appState.folders.find((f) => f.id === folderId);
+  const folderMap = buildFolderMap();
+  const folder = folderMap.get(folderId);
   if (!folder) return;
   const draft =
     appState.editingFolderDraft !== '' ? appState.editingFolderDraft : folder.name || '';
@@ -3440,7 +3850,8 @@ function removeFolder(folderId) {
     toastMessage('Default folder cannot be deleted');
     return;
   }
-  const folder = appState.folders.find((entry) => entry.id === folderId);
+  const folderMap = buildFolderMap();
+  const folder = folderMap.get(folderId);
   if (!folder) return;
   const hasChats = appState.chats.some((chat) => chat.folderId === folderId);
   if (hasChats) {
@@ -3536,7 +3947,8 @@ function findLastUserIndex(messages) {
 }
 
 function moveChat(chatId, folderId) {
-  const chat = appState.chats.find(c => c.id === chatId);
+  const chatMap = buildChatMap();
+  const chat = chatMap.get(chatId);
   if (!chat) return;
   
   // Close the menu before moving
@@ -3806,7 +4218,7 @@ async function readEventStream(response, onChunk) {
           // Only log if it looks like it might be an actual error
           if (line.startsWith('{') || line.startsWith('[')) {
             // This looked like JSON but failed to parse - might be malformed
-            console.warn('Failed to parse stream chunk as JSON:', line.substring(0, 100));
+            console.warn('Failed to parse stream chunk as JSON:', line.substring(0, CONFIG.ERROR_MESSAGE_PREVIEW_LENGTH));
           }
           // Otherwise, it's probably a status message, just skip it
         }
@@ -3825,7 +4237,7 @@ async function readEventStream(response, onChunk) {
   // If we got some text but no valid JSON data, and it's not just status messages
   if (!hasValidData && fullText.length > 0 && !fullText.match(/^[:a-zA-Z\s]+$/)) {
     // If it doesn't look like just status messages, it might be an error
-    const error = new Error('Stream did not contain valid JSON data: ' + fullText.substring(0, 100));
+    const error = new Error('Stream did not contain valid JSON data: ' + fullText.substring(0, CONFIG.ERROR_MESSAGE_PREVIEW_LENGTH));
     error.responseContent = fullText;
     throw error;
   }
@@ -3900,7 +4312,7 @@ async function performChatRequest({ chat, messageHistory, signal, onChunk }) {
       throw new Error('Invalid response from server');
     }
 
-    const shouldRetry = response.status === 429 && attempt < retryDelays.length;
+    const shouldRetry = response.status === CONFIG.RATE_LIMIT_STATUS && attempt < retryDelays.length;
     if (shouldRetry) {
       await wait(retryDelays[attempt]);
       continue;
@@ -4013,7 +4425,7 @@ function startPersonaEdit(persona) {
   personaNameInput.value = draft.name;
   personaContentInput.value = draft.content;
   personaModal.classList.add('show');
-  setTimeout(() => personaNameInput.focus(), 100);
+    setTimeout(() => personaNameInput.focus(), CONFIG.FOCUS_DELAY_MS);
 }
 
 function startPersonaCreate() {
@@ -4029,7 +4441,7 @@ function startPersonaCreate() {
   personaNameInput.value = draft.name;
   personaContentInput.value = draft.content;
   personaModal.classList.add('show');
-  setTimeout(() => personaNameInput.focus(), 100);
+    setTimeout(() => personaNameInput.focus(), CONFIG.FOCUS_DELAY_MS);
 }
 
 function closePersonaModal() {
@@ -4082,7 +4494,8 @@ function savePersona() {
 }
 
 function removePersona(personaId) {
-  const persona = appState.personas.find((p) => p.id === personaId);
+  const personaMap = buildPersonaMap();
+  const persona = personaMap.get(personaId);
   if (!persona) return;
 
   if (persona.isDefault) {
@@ -4201,7 +4614,7 @@ settingsButton.addEventListener('click', () => {
   // Focus on the first input of the active tab
   const activeTab = appState.activeSettingsTab || 'model';
   if (activeTab === 'model') {
-    setTimeout(() => settingsModelInput.focus(), 100);
+    setTimeout(() => settingsModelInput.focus(), CONFIG.FOCUS_DELAY_MS);
   }
 });
 settingsOverlay.addEventListener('click', (e) => {
@@ -4553,7 +4966,7 @@ if (canvasNewBlockButton) {
           selection.removeAllRanges();
           selection.addRange(range);
         }
-      }, 50);
+      }, CONFIG.ANIMATION_DELAY_MS);
     }
   });
 }
@@ -4588,7 +5001,7 @@ if (canvasAiEditButton) {
     
     // Check for pending changes
     if (hasPendingCanvasChanges(appState.openCanvasId)) {
-      toastMessage('Cannot edit while changes are pending review. Please accept or decline all pending changes first.', 4000);
+      toastMessage('Cannot edit while changes are pending review. Please accept or decline all pending changes first.', CONFIG.ERROR_TOAST_TIMEOUT_MS);
       return;
     }
     
@@ -4634,7 +5047,7 @@ if (canvasSelectAllButton) {
     
     // Re-render to show selection
     renderCanvasBlocks(canvas);
-    toastMessage(`Selected ${canvas.blocks.length} block${canvas.blocks.length !== 1 ? 's' : ''}`, 2000);
+    toastMessage(`Selected ${canvas.blocks.length} block${canvas.blocks.length !== 1 ? 's' : ''}`, CONFIG.INFO_TOAST_TIMEOUT_MS);
   });
 }
 
@@ -4651,7 +5064,7 @@ if (canvasDeselectAllButton) {
     if (canvas) {
       renderCanvasBlocks(canvas);
     }
-    toastMessage('All blocks deselected', 2000);
+    toastMessage('All blocks deselected', CONFIG.INFO_TOAST_TIMEOUT_MS);
   });
 }
 
@@ -4662,13 +5075,13 @@ if (canvasCopyAllButton) {
     
     // Check for pending changes
     if (hasPendingCanvasChanges(appState.openCanvasId)) {
-      toastMessage('Cannot copy while changes are pending review', 3000);
+      toastMessage('Cannot copy while changes are pending review', CONFIG.INFO_TOAST_TIMEOUT_MS);
       return;
     }
     
     const canvas = getCanvas(appState.openCanvasChatId, appState.openCanvasId);
     if (!canvas || !canvas.blocks || canvas.blocks.length === 0) {
-      toastMessage('No blocks to copy', 2000);
+      toastMessage('No blocks to copy', CONFIG.INFO_TOAST_TIMEOUT_MS);
       return;
     }
     
@@ -4677,10 +5090,10 @@ if (canvasCopyAllButton) {
     
     // Copy to clipboard
     navigator.clipboard.writeText(allText).then(() => {
-      toastMessage(`Copied ${canvas.blocks.length} block${canvas.blocks.length !== 1 ? 's' : ''} to clipboard`, 2000);
+      toastMessage(`Copied ${canvas.blocks.length} block${canvas.blocks.length !== 1 ? 's' : ''} to clipboard`, CONFIG.INFO_TOAST_TIMEOUT_MS);
     }).catch(err => {
       console.error('Failed to copy to clipboard:', err);
-      toastMessage('Failed to copy to clipboard', 3000);
+      toastMessage('Failed to copy to clipboard', CONFIG.INFO_TOAST_TIMEOUT_MS);
     });
   });
 }
